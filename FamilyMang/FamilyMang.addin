@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>FamilyMang</Name>
+    <Assembly>FamilyMang.dll</Assembly>
+    <FullClassName>FamilyMang.App</FullClassName>
+    <AddInId>03CB6832-D933-44CD-AD29-3933D5A934CE</AddInId>
+    <VendorId>FamilyMang</VendorId>
+    <VendorDescription>FamilyMang Plugin</VendorDescription>
+  </AddIn>
+</RevitAddIns>
