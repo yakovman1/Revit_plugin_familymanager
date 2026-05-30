@@ -55,6 +55,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="JwtAuthService.cs" />
     <Compile Include="ApiClient.cs" />
     <Compile Include="App.cs" />
     <Compile Include="CatalogCommand.cs" />

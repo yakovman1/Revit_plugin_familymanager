@@ -9,7 +9,8 @@
 
 - Вкладка **FamilyMang** на ленте Revit с панелью **Инструменты**
 - Кнопка **Каталог** — просмотр семейств из бэкенда
-  - Подключение к серверу по URL, JWT-токену и Project ID
+  - Подключение к серверу по URL и **Company ID**
+  - Windows-пользователь подставляется автоматически
   - Таблица семейств: имя, категория, файл, статус, размер
   - Пагинация (по 20 записей)
   - Кнопка **Загрузить в проект** — скачивает `.rfa` и загружает семейство в текущий документ Revit
@@ -20,6 +21,7 @@
   - Полный 4-шаговый upload flow: `init-upload` → S3 PUT → `metadata` → `complete`
 - Кнопка **О плагине** — информационный диалог
 - Настройки подключения сохраняются между сессиями (`%AppData%\FamilyMang\settings.json`)
+- Аутентификация через **Company ID** + Windows-логин → `POST /api/v1/auth` (JWT автоматически, без ручного токена)
 
 ## Требования
 
@@ -42,7 +44,8 @@ FamilyMang/
     ├── App.cs                    # IExternalApplication — вкладка, панель, кнопки
     ├── CatalogCommand.cs         # IExternalCommand — команда кнопки «Каталог»
     ├── CatalogWindow.cs          # WPF-окно каталога (code-only, без XAML)
-    ├── ApiClient.cs              # HTTP-клиент к бэкенду (FastAPI)
+    ├── ApiClient.cs              # HTTP-клиент к бэкенду (Bearer JWT)
+    ├── JwtAuthService.cs         # POST /api/v1/auth, кеш токена
     ├── Models.cs                 # DTO-классы для ответов API
     ├── Settings.cs               # Сохранение/загрузка настроек подключения
     ├── FamilyLoader.cs           # Скачивание .rfa и загрузка в документ Revit
@@ -137,38 +140,22 @@ copy "$(ProjectDir)FamilyMang.addin" "%AppData%\Autodesk\Revit\Addins\2022\Famil
 
    Сервер будет доступен по адресу `http://localhost:8000`.
 
-2. **Получите JWT-токен** (пример для тестирования):
+2. **Убедитесь, что компания зарегистрирована** в backend (`atptlp_info.companies`) и при необходимости пользователь в whitelist (`company_users`).
 
-   ```bash
-   python -c "
-   import uuid, jwt, datetime
-   payload = {'sub': str(uuid.uuid4()), 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=8)}
-   print(jwt.encode(payload, 'dev-secret-change', algorithm='HS256'))
-   "
-   ```
+3. **Запустите Revit 2022**.
 
-3. **Создайте проект и привяжите пользователя** (psql внутри контейнера):
+4. На ленте появится вкладка **FamilyMang** → панель **Инструменты**.
 
-   ```bash
-   docker exec -it <postgres-container> psql -U families -d families \
-     -c "INSERT INTO user_projects(user_id, project_id) VALUES ('<USER_UUID>', '<PROJECT_UUID>') ON CONFLICT DO NOTHING;"
-   ```
+5. Нажмите кнопку **Каталог**.
 
-4. **Запустите Revit 2022**.
-
-5. На ленте появится вкладка **FamilyMang** → панель **Инструменты**.
-
-6. Нажмите кнопку **Каталог**.
-
-7. В открывшемся окне:
+6. В открывшемся окне:
    - **Сервер**: `http://localhost:8000` (или адрес вашего сервера)
-   - **Project ID**: UUID проекта из шага 3
-   - **Токен**: JWT-токен из шага 2
+   - **Company ID**: код компании от администратора
    - Нажмите **Загрузить список**
 
-8. Выберите семейство из таблицы и нажмите **Загрузить в проект**.
+7. Выберите семейство из таблицы и нажмите **Загрузить в проект**.
 
-9. Семейство будет скачано с сервера и загружено в текущий документ Revit.
+8. Семейство будет скачано с сервера и загружено в текущий документ Revit.
 
 ### Загрузка семейства из проекта в хранилище
 
@@ -177,7 +164,7 @@ copy "$(ProjectDir)FamilyMang.addin" "%AppData%\Autodesk\Revit\Addins\2022\Famil
 2. На вкладке **FamilyMang** нажмите кнопку **Загрузка семейства**.
 
 3. В открывшемся окне:
-   - Заполните **Сервер**, **Project ID** и **Токен** (сохраняются автоматически)
+   - Заполните **Сервер** и **Company ID** (сохраняются автоматически)
    - Выберите семейство из списка
    - Нажмите **Загрузить в хранилище**
 
@@ -263,8 +250,7 @@ Revit UI                          Backend (FastAPI)              S3 / MinIO
 ```json
 {
   "ServerUrl": "http://localhost:8000",
-  "JwtToken": "eyJ...",
-  "ProjectId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  "CompanyId": "MY_COMPANY"
 }
 ```
 
@@ -275,6 +261,6 @@ Revit UI                          Backend (FastAPI)              S3 / MinIO
 | Вкладка не появляется в Revit | Проверьте, что `.addin` файл лежит в `%AppData%\Autodesk\Revit\Addins\2022\` и путь к DLL в нём корректен |
 | Ошибка «Could not load file or assembly» | Проверьте, что DLL собрана под **x64** и **.NET Framework 4.8** |
 | Ошибка подключения к серверу | Убедитесь, что бэкенд запущен и доступен по указанному URL |
-| 401 Unauthorized | Проверьте JWT-токен: он мог истечь. Сгенерируйте новый |
-| 403 Forbidden | Пользователь из токена не привязан к указанному проекту. Добавьте запись в `user_projects` |
+| 401 Unauthorized | Проверьте Company ID и что пользователь Windows в whitelist компании |
+| 403 Forbidden | Windows-пользователь не разрешён для этой компании |
 | Семейство не загружается в проект | Убедитесь, что в Revit открыт документ (не стартовая страница). Файл должен быть `.rfa` |

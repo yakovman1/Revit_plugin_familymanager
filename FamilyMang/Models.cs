@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace FamilyMang
 {
@@ -7,6 +9,29 @@ namespace FamilyMang
         public int ElementIdValue { get; set; }
         public string Name { get; set; }
         public string CategoryName { get; set; }
+        public bool IsPrimary { get; set; }
+        public string RoleDisplay { get; set; }
+    }
+
+    public class FamilyUploadBundle
+    {
+        public bool IsFamilyEditor { get; set; }
+        public string HostFamilyName { get; set; }
+        public string HostCategoryName { get; set; }
+        public List<FamilyDisplayItem> Items { get; set; } = new List<FamilyDisplayItem>();
+
+        public FamilyDisplayItem Primary =>
+            Items.FirstOrDefault(i => i.IsPrimary);
+
+        public IEnumerable<FamilyDisplayItem> Nested =>
+            Items.Where(i => !i.IsPrimary);
+    }
+
+    public class ExtractedUploadBundle
+    {
+        public ExtractedFamilyData Primary { get; set; }
+        public List<ExtractedFamilyData> Nested { get; set; } = new List<ExtractedFamilyData>();
+        public List<string> NestedErrors { get; set; } = new List<string>();
     }
 
     public class InitUploadResponseDto
@@ -16,6 +41,17 @@ namespace FamilyMang
         public string object_key { get; set; }
         public string presigned_put_url { get; set; }
         public int expires_in_seconds { get; set; }
+        public int version { get; set; } = 1;
+        public bool is_new { get; set; } = true;
+        public bool unchanged { get; set; }
+    }
+
+    public class FamilyUploadResult
+    {
+        public string FamilyId { get; set; }
+        public int Version { get; set; }
+        public bool IsNew { get; set; }
+        public bool Unchanged { get; set; }
     }
 
     public class ExtractedFamilyData
@@ -26,6 +62,7 @@ namespace FamilyMang
         public string Category { get; set; }
         public long SizeBytes { get; set; }
         public string Sha256 { get; set; }
+        public bool IsPrimary { get; set; }
         public List<Dictionary<string, object>> Parameters { get; set; }
         public List<Dictionary<string, object>> Types { get; set; }
     }
@@ -45,6 +82,19 @@ namespace FamilyMang
         public string updated_at { get; set; }
         public string uploaded_at { get; set; }
         public string etag { get; set; }
+        public object version { get; set; }
+
+        public int VersionNumber
+        {
+            get
+            {
+                if (version != null && int.TryParse(version.ToString(), out var v) && v > 0)
+                    return v;
+                return 1;
+            }
+        }
+
+        public string VersionDisplay => "v" + VersionNumber;
 
         public string FamilyName
         {
@@ -91,6 +141,305 @@ namespace FamilyMang
                 return metadata_json[key]?.ToString();
             return null;
         }
+
+        public Dictionary<string, object> ExtraMetadata
+        {
+            get
+            {
+                if (metadata_json == null || !metadata_json.ContainsKey("extra"))
+                    return null;
+                return metadata_json["extra"] as Dictionary<string, object>;
+            }
+        }
+
+        public bool IsPrimaryFamily
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(ParentFamilyId))
+                    return false;
+
+                var extra = ExtraMetadata;
+                if (extra == null)
+                    return true;
+
+                if (extra.TryGetValue("is_primary", out var flag))
+                {
+                    if (flag is bool b)
+                        return b;
+                    var text = flag?.ToString()?.Trim().ToLowerInvariant();
+                    if (text == "true") return true;
+                    if (text == "false") return false;
+                }
+
+                if (extra.TryGetValue("role", out var role))
+                {
+                    var roleText = role?.ToString()?.Trim().ToLowerInvariant();
+                    if (roleText == "nested")
+                        return false;
+                    if (roleText == "host")
+                        return true;
+                }
+
+                return true;
+            }
+        }
+
+        public string ParentFamilyId
+        {
+            get
+            {
+                var extra = ExtraMetadata;
+                if (extra == null || !extra.ContainsKey("parent_family_id"))
+                    return null;
+
+                var value = extra["parent_family_id"]?.ToString()?.Trim();
+                return string.IsNullOrEmpty(value) ? null : value;
+            }
+        }
+    }
+
+    /// <summary>Строка каталога: основное семейство или вложенное под ним.</summary>
+    public class CatalogFamilyRow
+    {
+        public FamilySummaryDto Family { get; set; }
+        public bool IsNested { get; set; }
+        public bool IsSelectable => !IsNested;
+
+        public string RoleDisplay =>
+            IsNested ? "\u0412\u043b\u043e\u0436\u0435\u043d\u043d\u043e\u0435" : "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0435";
+
+        public string FamilyName => Family?.FamilyName ?? "\u2014";
+        public string IndentedFamilyName =>
+            IsNested ? "    " + FamilyName : FamilyName;
+
+        public string Category => Family?.Category ?? "\u2014";
+        public string original_filename => Family?.original_filename ?? "\u2014";
+        public string StatusDisplay => Family?.StatusDisplay ?? "\u2014";
+        public string SizeDisplay => Family?.SizeDisplay ?? "\u2014";
+        public string VersionDisplay => Family?.VersionDisplay ?? "v1";
+    }
+
+    public static class CatalogHierarchy
+    {
+        /// <summary>Группы для пагинации: каждая группа = основное + его вложенные.</summary>
+        public static List<List<CatalogFamilyRow>> BuildPrimaryGroups(IEnumerable<FamilySummaryDto> items)
+        {
+            var idToCanonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var all = DeduplicateLatest(items, idToCanonical);
+            if (all.Count == 0)
+                return new List<List<CatalogFamilyRow>>();
+
+            var rootsByName = all
+                .Where(f => f.IsPrimaryFamily && string.IsNullOrEmpty(f.ParentFamilyId))
+                .ToDictionary(f => NormalizeKey(f.FamilyName), f => f, StringComparer.OrdinalIgnoreCase);
+
+            var nestedByParent = new Dictionary<string, List<FamilySummaryDto>>(StringComparer.OrdinalIgnoreCase);
+            var roots = new List<FamilySummaryDto>();
+
+            foreach (var family in all)
+            {
+                var parentId = ResolveCanonicalParentId(family, rootsByName, idToCanonical);
+                if (!string.IsNullOrEmpty(parentId) && !string.Equals(parentId, family.id, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!nestedByParent.ContainsKey(parentId))
+                        nestedByParent[parentId] = new List<FamilySummaryDto>();
+                    nestedByParent[parentId].Add(family);
+                }
+                else if (family.IsPrimaryFamily)
+                {
+                    roots.Add(family);
+                }
+            }
+
+            var rootIds = new HashSet<string>(roots.Select(r => r.id), StringComparer.OrdinalIgnoreCase);
+            foreach (var family in all)
+            {
+                if (family.IsPrimaryFamily || !string.IsNullOrEmpty(ResolveCanonicalParentId(family, rootsByName, idToCanonical)))
+                    continue;
+                if (!rootIds.Contains(family.id))
+                    roots.Add(family);
+            }
+
+            roots = roots
+                .GroupBy(r => HostKey(r), StringComparer.OrdinalIgnoreCase)
+                .Select(g => PickNewest(g))
+                .OrderByDescending(f => f.VersionNumber)
+                .ThenByDescending(f => ParseDateOrMin(f.updated_at))
+                .ThenByDescending(f => ParseDateOrMin(f.created_at))
+                .ToList();
+
+            var groups = new List<List<CatalogFamilyRow>>();
+            foreach (var root in roots)
+            {
+                var group = new List<CatalogFamilyRow> { ToRow(root, false) };
+                if (nestedByParent.TryGetValue(root.id, out var nested))
+                {
+                    foreach (var child in PickUniqueNewestNested(nested))
+                        group.Add(ToRow(child, true));
+                }
+                groups.Add(group);
+            }
+
+            var assignedNested = new HashSet<string>(
+                groups.SelectMany(g => g.Where(r => r.IsNested).Select(r => r.Family.id)),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var pair in nestedByParent)
+            {
+                var unassigned = PickUniqueNewestNested(
+                    pair.Value.Where(n => !assignedNested.Contains(n.id))).ToList();
+                if (unassigned.Count == 0)
+                    continue;
+
+                var syntheticRoot = all.FirstOrDefault(f =>
+                    string.Equals(f.id, pair.Key, StringComparison.OrdinalIgnoreCase));
+                var group = syntheticRoot != null
+                    ? new List<CatalogFamilyRow> { ToRow(syntheticRoot, false) }
+                    : new List<CatalogFamilyRow>();
+
+                foreach (var n in unassigned)
+                    group.Add(ToRow(n, true));
+
+                if (group.Count > 0)
+                    groups.Add(group);
+            }
+
+            return groups
+                .GroupBy(g => HostKey(g[0].Family), StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    var bestRoot = PickNewest(g.Select(row => row.Family));
+                    return g.First(gr => string.Equals(
+                        gr[0].Family.id, bestRoot.id, StringComparison.OrdinalIgnoreCase));
+                })
+                .OrderByDescending(g => g[0].Family.VersionNumber)
+                .ThenByDescending(g => ParseDateOrMin(g[0].Family.updated_at))
+                .ThenByDescending(g => ParseDateOrMin(g[0].Family.created_at))
+                .ToList();
+        }
+
+        private static string ResolveCanonicalParentId(
+            FamilySummaryDto family,
+            Dictionary<string, FamilySummaryDto> rootsByName,
+            Dictionary<string, string> idToCanonical)
+        {
+            if (!string.IsNullOrEmpty(family.ParentFamilyId) &&
+                idToCanonical.TryGetValue(family.ParentFamilyId, out var canonical))
+                return canonical;
+
+            var parentName = GetParentFamilyName(family);
+            if (!string.IsNullOrEmpty(parentName) &&
+                rootsByName.TryGetValue(NormalizeKey(parentName), out var root))
+                return root.id;
+
+            return family.ParentFamilyId;
+        }
+
+        private static List<FamilySummaryDto> DeduplicateLatest(
+            IEnumerable<FamilySummaryDto> items,
+            Dictionary<string, string> idToCanonical)
+        {
+            var all = items?.Where(f => f != null).ToList() ?? new List<FamilySummaryDto>();
+            if (all.Count <= 1)
+            {
+                foreach (var f in all)
+                    idToCanonical[f.id] = f.id;
+                return all;
+            }
+
+            var winnersByKey = new Dictionary<string, FamilySummaryDto>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var family in all)
+            {
+                var key = GetLogicalKey(family);
+
+                if (!winnersByKey.TryGetValue(key, out var current))
+                {
+                    winnersByKey[key] = family;
+                    idToCanonical[family.id] = family.id;
+                    continue;
+                }
+
+                if (IsNewerThan(family, current))
+                {
+                    idToCanonical[current.id] = family.id;
+                    idToCanonical[family.id] = family.id;
+                    winnersByKey[key] = family;
+                }
+                else
+                {
+                    idToCanonical[family.id] = current.id;
+                }
+            }
+
+            return winnersByKey.Values.ToList();
+        }
+
+        private static FamilySummaryDto PickNewest(IEnumerable<FamilySummaryDto> items) =>
+            items.OrderByDescending(f => f.VersionNumber)
+                .ThenByDescending(f => ParseDateOrMin(f.updated_at))
+                .ThenByDescending(f => ParseDateOrMin(f.created_at))
+                .ThenByDescending(f => f.id, StringComparer.OrdinalIgnoreCase)
+                .First();
+
+        private static IEnumerable<FamilySummaryDto> PickUniqueNewestNested(IEnumerable<FamilySummaryDto> nested) =>
+            nested.GroupBy(n => NestedKey(n), StringComparer.OrdinalIgnoreCase)
+                .Select(g => PickNewest(g))
+                .OrderBy(f => f.FamilyName, StringComparer.CurrentCultureIgnoreCase);
+
+        private static DateTime ParseDateOrMin(string value) =>
+            DateTime.TryParse(value, out var dt) ? dt : DateTime.MinValue;
+
+        private static string GetLogicalKey(FamilySummaryDto family)
+        {
+            if (!string.IsNullOrEmpty(family.ParentFamilyId) || !family.IsPrimaryFamily)
+                return NestedKey(family);
+            return HostKey(family);
+        }
+
+        private static string HostKey(FamilySummaryDto f) =>
+            "h:" + NormalizeKey(f.FamilyName) + "|" + NormalizeKey(f.Category);
+
+        private static string NestedKey(FamilySummaryDto f) =>
+            "n:" + NormalizeKey(f.FamilyName) + "|" + NormalizeKey(f.Category) + "|" +
+            NormalizeKey(GetParentFamilyName(f));
+
+        private static string GetParentFamilyName(FamilySummaryDto f)
+        {
+            var extra = f.ExtraMetadata;
+            if (extra != null && extra.TryGetValue("parent_family_name", out var name))
+            {
+                var text = name?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(text))
+                    return text;
+            }
+            return f.ParentFamilyId ?? "";
+        }
+
+        private static string NormalizeKey(string value) =>
+            string.IsNullOrWhiteSpace(value) ? "" : value.Trim();
+
+        private static bool IsNewerThan(FamilySummaryDto candidate, FamilySummaryDto current)
+        {
+            if (candidate.VersionNumber != current.VersionNumber)
+                return candidate.VersionNumber > current.VersionNumber;
+
+            if (DateTime.TryParse(candidate.updated_at, out var u1) &&
+                DateTime.TryParse(current.updated_at, out var u2) &&
+                u1 != u2)
+                return u1 > u2;
+
+            if (DateTime.TryParse(candidate.created_at, out var c1) &&
+                DateTime.TryParse(current.created_at, out var c2) &&
+                c1 != c2)
+                return c1 > c2;
+
+            return string.Compare(candidate.id, current.id, StringComparison.OrdinalIgnoreCase) > 0;
+        }
+
+        private static CatalogFamilyRow ToRow(FamilySummaryDto family, bool isNested) =>
+            new CatalogFamilyRow { Family = family, IsNested = isNested };
     }
 
     public class ListFamiliesResponseDto

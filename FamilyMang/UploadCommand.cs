@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Autodesk.Revit.Attributes;
@@ -23,43 +24,60 @@ namespace FamilyMang
                 if (doc == null)
                 {
                     TaskDialog.Show("FamilyMang",
-                        "Нет открытого документа. Откройте проект Revit.");
+                        "Нет открытого документа.");
                     return Result.Cancelled;
                 }
 
-                var families = FamilyExtractor.CollectFamilies(doc);
-                if (families.Count == 0)
+                if (!doc.IsFamilyDocument)
                 {
                     TaskDialog.Show("FamilyMang",
-                        "В документе не найдены загружаемые семейства.");
+                        "Откройте семейство в редакторе семейств Revit.\n\n" +
+                        "Выгрузка выполняется из редактора: основное семейство и все вложенные.");
                     return Result.Cancelled;
                 }
 
-                var window = new UploadWindow(families);
+                FamilyUploadBundle bundle;
+                try
+                {
+                    bundle = FamilyExtractor.CollectUploadBundle(doc);
+                }
+                catch (Exception ex)
+                {
+                    TaskDialog.Show("FamilyMang — Ошибка", ex.Message);
+                    return Result.Failed;
+                }
+
+                if (bundle.Items.Count == 0)
+                {
+                    TaskDialog.Show("FamilyMang",
+                        "В редакторе не найдены семейства для выгрузки.");
+                    return Result.Cancelled;
+                }
+
+                var window = new UploadWindow(bundle);
                 IntPtr hwnd = Process.GetCurrentProcess().MainWindowHandle;
                 if (hwnd != IntPtr.Zero)
                     new System.Windows.Interop.WindowInteropHelper(window).Owner = hwnd;
 
-                if (window.ShowDialog() != true || window.SelectedElementId < 0)
+                if (window.ShowDialog() != true)
                     return Result.Succeeded;
 
                 var settings = PluginSettings.Load();
-                int selectedId = window.SelectedElementId;
 
-                ExtractedFamilyData data;
+                ExtractedUploadBundle extracted;
                 try
                 {
-                    data = FamilyExtractor.ExtractAndSave(doc, selectedId);
+                    extracted = FamilyExtractor.ExtractBundle(doc, bundle);
                 }
                 catch (Exception ex)
                 {
                     TaskDialog.Show("FamilyMang — Ошибка",
-                        $"Не удалось извлечь данные семейства:\n{ex.Message}");
+                        $"Не удалось подготовить файлы семейств:\n{ex.Message}");
                     return Result.Failed;
                 }
 
                 string resultMessage = Task.Run(() =>
-                    PerformUploadAsync(settings, data)).GetAwaiter().GetResult();
+                    UploadExtractedBundleAsync(settings, extracted)).GetAwaiter().GetResult();
 
                 TaskDialog.Show("FamilyMang", resultMessage);
                 return Result.Succeeded;
@@ -72,30 +90,128 @@ namespace FamilyMang
             }
         }
 
-        private static async Task<string> PerformUploadAsync(
-            PluginSettings settings, ExtractedFamilyData data)
+        private static async Task<string> UploadExtractedBundleAsync(
+            PluginSettings settings, ExtractedUploadBundle extracted)
         {
-            using (var client = new ApiClient())
+            using (var auth = new JwtAuthService(settings.ServerUrl, settings.CompanyId))
+            using (var client = new ApiClient(auth))
             {
                 client.BaseUrl = settings.ServerUrl;
-                client.Token = settings.JwtToken;
 
-                InitUploadResponseDto init;
-                try
+                var primaryData = extracted.Primary;
+                var nestedPreview = extracted.Nested.Select(n => new Dictionary<string, object>
                 {
-                    init = await client.InitUploadAsync(
-                        settings.ProjectId,
-                        data.OriginalFilename,
-                        data.SizeBytes,
-                        data.Sha256).ConfigureAwait(false);
-                }
-                catch (HttpRequestException ex)
+                    { "family_name", n.FamilyName },
+                    { "category", n.Category ?? "" },
+                    { "role", "nested" }
+                }).ToList<object>();
+
+                var primaryResult = await UploadSingleAsync(
+                    client, primaryData,
+                    parentFamilyId: null,
+                    parentFamilyName: null,
+                    nestedPreview: nestedPreview).ConfigureAwait(false);
+
+                int nestedOk = 0;
+                var nestedErrors = new List<string>(extracted.NestedErrors);
+                var nestedVersionLines = new List<string>();
+
+                foreach (var nestedData in extracted.Nested)
                 {
-                    throw new Exception(
-                        $"Ошибка init-upload (проверьте токен и Project ID):\n{ex.Message}", ex);
+                    try
+                    {
+                        var nestedResult = await UploadSingleAsync(
+                            client, nestedData,
+                            parentFamilyId: primaryResult.FamilyId,
+                            parentFamilyName: primaryData.FamilyName,
+                            nestedPreview: null).ConfigureAwait(false);
+                        nestedOk++;
+                        nestedVersionLines.Add(
+                            $"  • {nestedData.FamilyName}: {FormatVersionLine(nestedResult)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        nestedErrors.Add($"{nestedData.FamilyName}: {ex.Message}");
+                    }
                 }
 
-                string etag;
+                var lines = new List<string>
+                {
+                    $"Основное семейство «{primaryData.FamilyName}»: {FormatVersionLine(primaryResult)}",
+                    $"ID: {primaryResult.FamilyId}",
+                    $"Вложенных: {nestedOk} из {extracted.Nested.Count}"
+                };
+
+                if (nestedVersionLines.Count > 0)
+                {
+                    lines.Add("");
+                    lines.AddRange(nestedVersionLines);
+                }
+
+                if (nestedErrors.Count > 0)
+                {
+                    lines.Add("");
+                    lines.Add("Ошибки вложенных:");
+                    lines.AddRange(nestedErrors);
+                }
+
+                return string.Join("\n", lines);
+            }
+        }
+
+        private static string FormatVersionLine(FamilyUploadResult result)
+        {
+            if (result.Unchanged)
+                return $"без изменений (v{result.Version})";
+            if (result.IsNew)
+                return $"создано v{result.Version}";
+            return $"обновлено до v{result.Version}";
+        }
+
+        private static async Task<FamilyUploadResult> UploadSingleAsync(
+            ApiClient client,
+            ExtractedFamilyData data,
+            string parentFamilyId,
+            string parentFamilyName,
+            List<object> nestedPreview)
+        {
+            InitUploadResponseDto init;
+            try
+            {
+                init = await client.InitUploadAsync(
+                    data.OriginalFilename,
+                    data.SizeBytes,
+                    data.Sha256,
+                    data.FamilyName,
+                    data.Category,
+                    data.IsPrimary,
+                    parentFamilyId).ConfigureAwait(false);
+            }
+            catch (AuthException ex)
+            {
+                throw new Exception(
+                    $"Ошибка аутентификации (проверьте Company ID):\n{ex.Message}", ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new Exception($"Ошибка init-upload:\n{ex.Message}", ex);
+            }
+
+            var version = init.version > 0 ? init.version : 1;
+            if (init.unchanged)
+            {
+                return new FamilyUploadResult
+                {
+                    FamilyId = init.family_id,
+                    Version = version,
+                    IsNew = false,
+                    Unchanged = true
+                };
+            }
+
+            string etag = null;
+            if (!string.IsNullOrWhiteSpace(init.presigned_put_url))
+            {
                 try
                 {
                     etag = await client.UploadToS3Async(
@@ -103,48 +219,60 @@ namespace FamilyMang
                 }
                 catch (HttpRequestException ex)
                 {
-                    throw new Exception(
-                        $"Ошибка загрузки файла в S3:\n{ex.Message}", ex);
+                    throw new Exception($"Ошибка загрузки файла в S3:\n{ex.Message}", ex);
                 }
-
-                var metadata = new Dictionary<string, object>
-                {
-                    { "family_name", data.FamilyName },
-                    { "category", data.Category ?? "" },
-                    { "parameters", data.Parameters },
-                    { "types", data.Types },
-                    { "extra", new Dictionary<string, object>() }
-                };
-
-                try
-                {
-                    await client.PostMetadataAsync(
-                        init.family_id, metadata).ConfigureAwait(false);
-                }
-                catch (HttpRequestException ex)
-                {
-                    throw new Exception(
-                        $"Ошибка отправки метаданных:\n{ex.Message}", ex);
-                }
-
-                try
-                {
-                    await client.CompleteUploadAsync(
-                        init.family_id, etag).ConfigureAwait(false);
-                }
-                catch (HttpRequestException ex)
-                {
-                    throw new Exception(
-                        $"Ошибка завершения загрузки:\n{ex.Message}", ex);
-                }
-
-                return $"Семейство «{data.FamilyName}» успешно загружено!\n\n" +
-                       $"ID: {init.family_id}\n" +
-                       $"Файл: {data.OriginalFilename}\n" +
-                       $"Размер: {data.SizeBytes / 1024.0:F1} KB\n" +
-                       $"Параметров: {data.Parameters.Count}\n" +
-                       $"Типоразмеров: {data.Types.Count}";
             }
+
+            var extra = new Dictionary<string, object>
+            {
+                { "is_primary", data.IsPrimary },
+                { "role", data.IsPrimary ? "host" : "nested" },
+                { "version", version }
+            };
+
+            if (!string.IsNullOrEmpty(parentFamilyId))
+            {
+                extra["parent_family_id"] = parentFamilyId;
+                extra["parent_family_name"] = parentFamilyName ?? "";
+            }
+
+            if (nestedPreview != null && nestedPreview.Count > 0)
+                extra["nested_children"] = nestedPreview;
+
+            var metadata = new Dictionary<string, object>
+            {
+                { "family_name", data.FamilyName },
+                { "category", data.Category ?? "" },
+                { "parameters", data.Parameters },
+                { "types", data.Types },
+                { "extra", extra }
+            };
+
+            try
+            {
+                await client.PostMetadataAsync(init.family_id, metadata).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new Exception($"Ошибка отправки метаданных:\n{ex.Message}", ex);
+            }
+
+            try
+            {
+                await client.CompleteUploadAsync(init.family_id, etag).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new Exception($"Ошибка завершения загрузки:\n{ex.Message}", ex);
+            }
+
+            return new FamilyUploadResult
+            {
+                FamilyId = init.family_id,
+                Version = version,
+                IsNew = init.is_new,
+                Unchanged = false
+            };
         }
     }
 }

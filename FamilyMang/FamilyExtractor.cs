@@ -12,66 +12,258 @@ namespace FamilyMang
         private static readonly string TempDir =
             Path.Combine(Path.GetTempPath(), "FamilyMang", "upload");
 
-        public static List<FamilyDisplayItem> CollectFamilies(Document doc)
+        public static FamilyUploadBundle CollectUploadBundle(Document doc)
         {
-            return new FilteredElementCollector(doc)
-                .OfClass(typeof(Family))
-                .Cast<Family>()
-                .Where(f => !f.IsInPlace)
-                .Select(f => new FamilyDisplayItem
-                {
-                    ElementIdValue = f.Id.IntegerValue,
-                    Name = f.Name,
-                    CategoryName = f.FamilyCategory?.Name ?? "\u2014"
-                })
-                .OrderBy(f => f.CategoryName)
-                .ThenBy(f => f.Name)
-                .ToList();
+            if (doc == null) throw new ArgumentNullException(nameof(doc));
+
+            if (doc.IsFamilyDocument)
+                return CollectFromFamilyEditor(doc);
+
+            return CollectFromProject(doc);
         }
 
-        public static ExtractedFamilyData ExtractAndSave(Document doc, int familyElementId)
+        /// <summary>
+        /// Извлечение всех .rfa — только на главном потоке Revit (до HTTP).
+        /// </summary>
+        public static ExtractedUploadBundle ExtractBundle(Document doc, FamilyUploadBundle bundle)
+        {
+            var primaryItem = bundle.Primary;
+            if (primaryItem == null)
+                throw new InvalidOperationException("Не найдено основное семейство.");
+
+            var result = new ExtractedUploadBundle
+            {
+                Primary = ExtractAndSave(doc, primaryItem)
+            };
+
+            foreach (var nestedItem in bundle.Nested)
+            {
+                try
+                {
+                    result.Nested.Add(ExtractAndSave(doc, nestedItem));
+                }
+                catch (Exception ex)
+                {
+                    result.NestedErrors.Add($"{nestedItem.Name}: {ex.Message}");
+                }
+            }
+
+            return result;
+        }
+
+        private static FamilyUploadBundle CollectFromFamilyEditor(Document doc)
+        {
+            var owner = doc.OwnerFamily;
+            if (owner == null)
+                throw new InvalidOperationException("Не удалось определить основное семейство редактора.");
+
+            string hostName = ResolveHostFamilyName(doc, owner);
+
+            var primaryItem = ToDisplayItem(owner, isPrimary: true);
+            primaryItem.Name = hostName;
+            primaryItem.CategoryName = owner.FamilyCategory?.Name ?? "\u2014";
+
+            var items = new List<FamilyDisplayItem> { primaryItem };
+
+            var nested = new FilteredElementCollector(doc)
+                .OfClass(typeof(Family))
+                .Cast<Family>()
+                .Where(f => f.Id != owner.Id && IsUploadableFamily(f))
+                .OrderBy(f => f.FamilyCategory?.Name ?? "")
+                .ThenBy(f => f.Name)
+                .Select(f => ToDisplayItem(f, isPrimary: false));
+
+            items.AddRange(nested);
+
+            return new FamilyUploadBundle
+            {
+                IsFamilyEditor = true,
+                HostFamilyName = hostName,
+                HostCategoryName = primaryItem.CategoryName,
+                Items = items
+            };
+        }
+
+        public static string ResolveHostFamilyName(Document doc, Family owner)
+        {
+            if (owner != null && !string.IsNullOrWhiteSpace(owner.Name))
+                return owner.Name.Trim();
+
+            if (!string.IsNullOrWhiteSpace(doc.PathName))
+            {
+                var fromPath = Path.GetFileNameWithoutExtension(doc.PathName)?.Trim();
+                if (!string.IsNullOrWhiteSpace(fromPath))
+                    return fromPath;
+            }
+
+            if (!string.IsNullOrWhiteSpace(doc.Title))
+                return doc.Title.Trim();
+
+            return "\u0421\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u0431\u0435\u0437 \u0438\u043c\u0435\u043d\u0438";
+        }
+
+        private static FamilyUploadBundle CollectFromProject(Document doc)
+        {
+            var items = new FilteredElementCollector(doc)
+                .OfClass(typeof(Family))
+                .Cast<Family>()
+                .Where(IsUploadableFamily)
+                .OrderBy(f => f.FamilyCategory?.Name ?? "")
+                .ThenBy(f => f.Name)
+                .Select(f => ToDisplayItem(f, isPrimary: false))
+                .ToList();
+
+            return new FamilyUploadBundle
+            {
+                IsFamilyEditor = false,
+                Items = items
+            };
+        }
+
+        /// <summary>
+        /// Системные аннотации (заголовки уровней/разрезов и т.п.) не редактируются через EditFamily — не показываем и не выгружаем.
+        /// </summary>
+        private static bool IsUploadableFamily(Family family)
+        {
+            if (family == null || family.IsInPlace)
+                return false;
+
+            try
+            {
+                return family.IsEditable;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static FamilyDisplayItem ToDisplayItem(Family family, bool isPrimary)
+        {
+            return new FamilyDisplayItem
+            {
+                ElementIdValue = family.Id.IntegerValue,
+                Name = string.IsNullOrWhiteSpace(family.Name) ? "\u2014" : family.Name,
+                CategoryName = family.FamilyCategory?.Name ?? "\u2014",
+                IsPrimary = isPrimary,
+                RoleDisplay = isPrimary ? "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0435" : "\u0412\u043b\u043e\u0436\u0435\u043d\u043d\u043e\u0435"
+            };
+        }
+
+        public static ExtractedFamilyData ExtractAndSave(Document doc, FamilyDisplayItem item)
+        {
+            if (doc.IsFamilyDocument && item.IsPrimary)
+                return ExtractHostFromFamilyEditor(doc);
+
+            if (doc.IsFamilyDocument)
+                return ExtractNestedFromFamilyEditor(doc, item.ElementIdValue);
+
+            return ExtractFromProject(doc, item.ElementIdValue);
+        }
+
+        private static ExtractedFamilyData ExtractHostFromFamilyEditor(Document doc)
+        {
+            var family = doc.OwnerFamily;
+            if (family == null)
+                throw new InvalidOperationException("Редактор семейств не содержит OwnerFamily.");
+
+            Directory.CreateDirectory(TempDir);
+            string familyName = ResolveHostFamilyName(doc, family);
+            string fileName = SanitizeName(familyName) + ".rfa";
+            string filePath = Path.Combine(TempDir, fileName);
+
+            // Копия с диска безопаснее, чем SaveAs открытого документа
+            if (TryCopyExistingFamilyFile(doc, filePath))
+            {
+                // ok
+            }
+            else
+            {
+                doc.SaveAs(filePath, new SaveAsOptions { OverwriteExistingFile = true });
+            }
+
+            var data = BuildExtractedData(family, doc.FamilyManager, filePath, fileName, isPrimary: true);
+            data.FamilyName = familyName;
+            return data;
+        }
+
+        private static bool TryCopyExistingFamilyFile(Document doc, string destPath)
+        {
+            try
+            {
+                var sourcePath = doc.PathName;
+                if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+                    return false;
+
+                File.Copy(sourcePath, destPath, overwrite: true);
+                return new FileInfo(destPath).Length > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static ExtractedFamilyData ExtractNestedFromFamilyEditor(Document doc, int familyElementId)
+        {
+            var family = doc.GetElement(new ElementId(familyElementId)) as Family;
+            if (family == null)
+                throw new InvalidOperationException("Вложенное семейство не найдено в редакторе.");
+
+            return ExtractViaEditFamily(doc, family, isPrimary: false);
+        }
+
+        private static ExtractedFamilyData ExtractFromProject(Document doc, int familyElementId)
         {
             var family = doc.GetElement(new ElementId(familyElementId)) as Family;
             if (family == null)
                 throw new InvalidOperationException("Семейство не найдено в документе.");
 
+            return ExtractViaEditFamily(doc, family, isPrimary: false);
+        }
+
+        private static ExtractedFamilyData ExtractViaEditFamily(Document doc, Family family, bool isPrimary)
+        {
             Directory.CreateDirectory(TempDir);
-            string fileName = SanitizeName(family.Name) + ".rfa";
+            string displayName = string.IsNullOrWhiteSpace(family.Name) ? "nested" : family.Name;
+            string fileName = SanitizeName(displayName) + ".rfa";
             string filePath = Path.Combine(TempDir, fileName);
 
             Document famDoc = doc.EditFamily(family);
             if (famDoc == null)
                 throw new InvalidOperationException(
-                    $"Не удалось открыть семейство «{family.Name}» для чтения.");
+                    $"Не удалось открыть семейство «{displayName}» для чтения.");
 
             try
             {
                 famDoc.SaveAs(filePath, new SaveAsOptions { OverwriteExistingFile = true });
-
-                FamilyManager fm = famDoc.FamilyManager;
-
-                var parameters = ExtractParameters(fm);
-                var types = ExtractTypes(fm);
-
-                var fi = new FileInfo(filePath);
-                string sha256 = ComputeSha256(filePath);
-
-                return new ExtractedFamilyData
-                {
-                    FilePath = filePath,
-                    FamilyName = family.Name,
-                    OriginalFilename = fileName,
-                    Category = family.FamilyCategory?.Name,
-                    SizeBytes = fi.Length,
-                    Sha256 = sha256,
-                    Parameters = parameters,
-                    Types = types
-                };
+                var data = BuildExtractedData(family, famDoc.FamilyManager, filePath, fileName, isPrimary);
+                if (string.IsNullOrWhiteSpace(data.FamilyName))
+                    data.FamilyName = displayName;
+                return data;
             }
             finally
             {
                 famDoc.Close(false);
             }
+        }
+
+        private static ExtractedFamilyData BuildExtractedData(
+            Family family, FamilyManager fm, string filePath, string fileName, bool isPrimary)
+        {
+            var fi = new FileInfo(filePath);
+            return new ExtractedFamilyData
+            {
+                FilePath = filePath,
+                FamilyName = family.Name,
+                OriginalFilename = fileName,
+                Category = family.FamilyCategory?.Name,
+                SizeBytes = fi.Length,
+                Sha256 = ComputeSha256(filePath),
+                Parameters = ExtractParameters(fm),
+                Types = ExtractTypes(fm),
+                IsPrimary = isPrimary
+            };
         }
 
         private static List<Dictionary<string, object>> ExtractParameters(FamilyManager fm)
@@ -165,6 +357,8 @@ namespace FamilyMang
 
         private static string SanitizeName(string name)
         {
+            if (string.IsNullOrWhiteSpace(name))
+                name = "family";
             foreach (char c in Path.GetInvalidFileNameChars())
                 name = name.Replace(c, '_');
             return name;

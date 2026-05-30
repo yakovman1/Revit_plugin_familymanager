@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,12 +14,11 @@ namespace FamilyMang
     {
         private const int PageSize = 20;
 
-        private readonly ApiClient _client = new ApiClient();
         private readonly PluginSettings _settings;
 
         private TextBox _urlBox;
-        private TextBox _tokenBox;
-        private TextBox _projectBox;
+        private TextBox _companyBox;
+        private TextBlock _userLabel;
         private DataGrid _grid;
         private Button _connectBtn;
         private Button _loadBtn;
@@ -28,6 +29,8 @@ namespace FamilyMang
 
         private int _offset;
         private int _total;
+        private List<FamilySummaryDto> _cachedFamilies;
+        private List<List<CatalogFamilyRow>> _primaryGroups = new List<List<CatalogFamilyRow>>();
 
         public string DownloadedFilePath { get; private set; }
 
@@ -93,13 +96,18 @@ namespace FamilyMang
             Put(grid, Label("\u0421\u0435\u0440\u0432\u0435\u0440:"), 0, 0);
             _urlBox = TextInput(); Put(grid, _urlBox, 0, 1);
 
-            Put(grid, Label("Project ID:", 12), 0, 2);
-            _projectBox = TextInput(); Put(grid, _projectBox, 0, 3);
+            Put(grid, Label("Company ID:", 12), 0, 2);
+            _companyBox = TextInput(); Put(grid, _companyBox, 0, 3);
 
-            Put(grid, Label("\u0422\u043e\u043a\u0435\u043d:"), 2, 0);
-            _tokenBox = TextInput();
-            Grid.SetColumnSpan(_tokenBox, 3);
-            Put(grid, _tokenBox, 2, 1);
+            Put(grid, Label("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:"), 2, 0);
+            _userLabel = new TextBlock
+            {
+                Text = Environment.UserName,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80))
+            };
+            Grid.SetColumnSpan(_userLabel, 3);
+            Put(grid, _userLabel, 2, 1);
 
             _connectBtn = Btn("\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a", true);
             _connectBtn.Margin = new Thickness(8, 0, 0, 0);
@@ -135,18 +143,66 @@ namespace FamilyMang
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
 
-            dg.Columns.Add(TextCol("\u0418\u043c\u044f \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u0430", "FamilyName", 2));
+            dg.LoadingRow += OnGridLoadingRow;
+
+            dg.Columns.Add(TextCol("\u0420\u043e\u043b\u044c", "RoleDisplay", 0, 110));
+            dg.Columns.Add(TextCol("\u0418\u043c\u044f \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u0430", "IndentedFamilyName", 2));
             dg.Columns.Add(TextCol("\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f", "Category", 1));
+            dg.Columns.Add(TextCol("\u0412\u0435\u0440\u0441\u0438\u044f", "VersionDisplay", 0, 60));
             dg.Columns.Add(TextCol("\u0424\u0430\u0439\u043b", "original_filename", 1.5));
             dg.Columns.Add(TextCol("\u0421\u0442\u0430\u0442\u0443\u0441", "StatusDisplay", 0, 100));
             dg.Columns.Add(TextCol("\u0420\u0430\u0437\u043c\u0435\u0440", "SizeDisplay", 0, 80));
 
-            dg.SelectionChanged += (s, e) =>
-            {
-                if (_loadBtn != null) _loadBtn.IsEnabled = dg.SelectedItem != null;
-            };
+            dg.SelectionChanged += OnGridSelectionChanged;
+            dg.PreviewMouseDown += OnGridPreviewMouseDown;
 
             return dg;
+        }
+
+        private void OnGridLoadingRow(object sender, DataGridRowEventArgs e)
+        {
+            if (!(e.Row.Item is CatalogFamilyRow row))
+                return;
+
+            if (row.IsNested)
+            {
+                e.Row.IsEnabled = false;
+                e.Row.Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110));
+                e.Row.Background = new SolidColorBrush(Color.FromRgb(248, 248, 248));
+            }
+            else
+            {
+                e.Row.FontWeight = FontWeights.SemiBold;
+            }
+        }
+
+        private void OnGridSelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadBtn == null)
+                return;
+
+            if (_grid.SelectedItem is CatalogFamilyRow row && row.IsSelectable)
+                _loadBtn.IsEnabled = true;
+            else
+            {
+                _loadBtn.IsEnabled = false;
+                if (_grid.SelectedItem is CatalogFamilyRow nested && nested.IsNested)
+                    _grid.SelectedItem = null;
+            }
+        }
+
+        private void OnGridPreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            var dep = e.OriginalSource as DependencyObject;
+            while (dep != null && !(dep is DataGridRow))
+                dep = VisualTreeHelper.GetParent(dep);
+
+            if (dep is DataGridRow row &&
+                row.Item is CatalogFamilyRow item &&
+                item.IsNested)
+            {
+                e.Handled = true;
+            }
         }
 
         private StackPanel BuildPaginationBar()
@@ -284,15 +340,13 @@ namespace FamilyMang
         private void RestoreSettings()
         {
             _urlBox.Text = _settings.ServerUrl;
-            _tokenBox.Text = _settings.JwtToken;
-            _projectBox.Text = _settings.ProjectId;
+            _companyBox.Text = _settings.CompanyId;
         }
 
         private void PersistSettings()
         {
             _settings.ServerUrl = _urlBox.Text.Trim();
-            _settings.JwtToken = _tokenBox.Text.Trim();
-            _settings.ProjectId = _projectBox.Text.Trim();
+            _settings.CompanyId = _companyBox.Text.Trim();
             _settings.Save();
         }
 
@@ -306,6 +360,7 @@ namespace FamilyMang
         {
             PersistSettings();
             _offset = 0;
+            _cachedFamilies = null;
             await LoadPageAsync();
         }
 
@@ -323,10 +378,10 @@ namespace FamilyMang
 
         private async Task LoadPageAsync()
         {
-            var projectId = _projectBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(projectId))
+            var companyId = _companyBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(companyId))
             {
-                Status("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 Project ID", true);
+                Status("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 Company ID", true);
                 return;
             }
 
@@ -335,19 +390,51 @@ namespace FamilyMang
 
             try
             {
-                _client.BaseUrl = _urlBox.Text.Trim();
-                _client.Token = _tokenBox.Text.Trim();
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), companyId))
+                using (var client = new ApiClient(auth))
+                {
+                    client.BaseUrl = _urlBox.Text.Trim();
+                    if (_cachedFamilies == null)
+                        _cachedFamilies = await client.GetAllFamiliesAsync().ConfigureAwait(true);
 
-                var result = await _client.GetFamiliesAsync(projectId, PageSize, _offset);
-                _total = result.total;
-                _grid.ItemsSource = result.items;
+                    _primaryGroups = CatalogHierarchy.BuildPrimaryGroups(_cachedFamilies);
+                    _total = _primaryGroups.Count;
+
+                    var pageGroups = _primaryGroups
+                        .Skip(_offset)
+                        .Take(PageSize)
+                        .ToList();
+
+                    var rows = pageGroups.SelectMany(g => g).ToList();
+                    _grid.ItemsSource = rows;
+                    RefreshPagination();
+
+                    int nestedOnPage = rows.Count(r => r.IsNested);
+                    int primaryOnPage = rows.Count - nestedOnPage;
+                    Status(
+                        $"\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0433\u0440\u0443\u043f\u043f: {primaryOnPage} \u043e\u0441\u043d\u043e\u0432\u043d\u044b\u0445" +
+                        (nestedOnPage > 0 ? $", {nestedOnPage} \u0432\u043b\u043e\u0436\u0435\u043d\u043d\u044b\u0445" : "") +
+                        $" (\u0432\u0441\u0435\u0433\u043e \u0432 \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435: {_total})",
+                        false);
+                }
+            }
+            catch (AuthException ex)
+            {
+                Status(ex.StatusCode == 403
+                    ? "\u041e\u0448\u0438\u0431\u043a\u0430: Company ID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d \u0438\u043b\u0438 \u0434\u043e\u0441\u0442\u0443\u043f \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d"
+                    : $"\u041e\u0448\u0438\u0431\u043a\u0430 \u0430\u0443\u0442\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u0438: {ex.Message}", true);
+                _grid.ItemsSource = null;
+                _cachedFamilies = null;
+                _primaryGroups.Clear();
+                _total = 0;
                 RefreshPagination();
-                Status($"\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e {result.items.Count} \u0438\u0437 {_total}", false);
             }
             catch (Exception ex)
             {
                 Status($"\u041e\u0448\u0438\u0431\u043a\u0430: {ex.Message}", true);
                 _grid.ItemsSource = null;
+                _cachedFamilies = null;
+                _primaryGroups.Clear();
                 _total = 0;
                 RefreshPagination();
             }
@@ -359,15 +446,25 @@ namespace FamilyMang
 
         private async void OnLoadClick(object sender, RoutedEventArgs e)
         {
-            if (!(_grid.SelectedItem is FamilySummaryDto selected)) return;
+            if (!(_grid.SelectedItem is CatalogFamilyRow row) || !row.IsSelectable)
+                return;
+
+            var selected = row.Family;
+            if (selected == null)
+                return;
 
             Busy(true);
             Status($"\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 {selected.original_filename}\u2026", false);
 
             try
             {
-                DownloadedFilePath = await FamilyLoader.DownloadAsync(
-                    _client, selected.id, selected.original_filename);
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), _companyBox.Text.Trim()))
+                using (var client = new ApiClient(auth))
+                {
+                    client.BaseUrl = _urlBox.Text.Trim();
+                    DownloadedFilePath = await FamilyLoader.DownloadAsync(
+                        client, selected.id, selected.original_filename);
+                }
                 SaveAndClose(true);
             }
             catch (Exception ex)
@@ -397,10 +494,10 @@ namespace FamilyMang
         private void Busy(bool busy)
         {
             _connectBtn.IsEnabled = !busy;
-            _loadBtn.IsEnabled = !busy && _grid.SelectedItem != null;
+            _loadBtn.IsEnabled = !busy &&
+                _grid.SelectedItem is CatalogFamilyRow r && r.IsSelectable;
             _urlBox.IsEnabled = !busy;
-            _tokenBox.IsEnabled = !busy;
-            _projectBox.IsEnabled = !busy;
+            _companyBox.IsEnabled = !busy;
             Cursor = busy ? Cursors.Wait : null;
         }
 
