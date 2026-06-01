@@ -62,7 +62,10 @@
     <Compile Include="CatalogWindow.cs" />
     <Compile Include="Command.cs" />
     <Compile Include="FamilyExtractor.cs" />
+    <Compile Include="FamilyThumbnailExporter.cs" />
+    <Compile Include="FamilyThumbnailUpload.cs" />
     <Compile Include="FamilyLoader.cs" />
+    <Compile Include="ThumbnailCache.cs" />
     <Compile Include="Models.cs" />
     <Compile Include="Settings.cs" />
     <Compile Include="UploadCommand.cs" />

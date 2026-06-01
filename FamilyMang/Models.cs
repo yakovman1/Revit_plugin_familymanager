@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace FamilyMang
 {
@@ -44,6 +46,8 @@ namespace FamilyMang
         public int version { get; set; } = 1;
         public bool is_new { get; set; } = true;
         public bool unchanged { get; set; }
+        public string thumbnail_object_key { get; set; }
+        public string presigned_thumbnail_put_url { get; set; }
     }
 
     public class FamilyUploadResult
@@ -52,6 +56,7 @@ namespace FamilyMang
         public int Version { get; set; }
         public bool IsNew { get; set; }
         public bool Unchanged { get; set; }
+        public string ThumbnailNote { get; set; }
     }
 
     public class ExtractedFamilyData
@@ -83,6 +88,9 @@ namespace FamilyMang
         public string uploaded_at { get; set; }
         public string etag { get; set; }
         public object version { get; set; }
+        public bool has_thumbnail { get; set; }
+
+        public bool HasThumbnail => has_thumbnail;
 
         public int VersionNumber
         {
@@ -199,12 +207,64 @@ namespace FamilyMang
         }
     }
 
-    /// <summary>Строка каталога: основное семейство или вложенное под ним.</summary>
-    public class CatalogFamilyRow
+    public class FavoriteItemDto
     {
+        public string family_id { get; set; }
+        public string created_at { get; set; }
+    }
+
+    public class ListFavoritesResponseDto
+    {
+        public List<FavoriteItemDto> items { get; set; } = new List<FavoriteItemDto>();
+    }
+
+    public class AddFavoriteResponseDto
+    {
+        public string family_id { get; set; }
+        public string created_at { get; set; }
+    }
+
+    public class ThumbnailUrlResponseDto
+    {
+        public string presigned_get_url { get; set; }
+        public int expires_in_seconds { get; set; }
+    }
+
+    public class ThumbnailInitResponseDto
+    {
+        public string presigned_put_url { get; set; }
+        public string thumbnail_object_key { get; set; }
+        public int expires_in_seconds { get; set; }
+    }
+
+    /// <summary>Строка каталога: основное семейство или вложенное под ним.</summary>
+    public class CatalogFamilyRow : INotifyPropertyChanged
+    {
+        private bool _isFavorite;
+
         public FamilySummaryDto Family { get; set; }
         public bool IsNested { get; set; }
         public bool IsSelectable => !IsNested;
+
+        public bool IsFavorite
+        {
+            get => _isFavorite;
+            set
+            {
+                if (_isFavorite == value)
+                    return;
+                _isFavorite = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(FavoriteDisplay));
+            }
+        }
+
+        public string FavoriteDisplay => IsFavorite ? "\u2605" : "\u2606";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        private void OnPropertyChanged([CallerMemberName] string name = null) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
         public string RoleDisplay =>
             IsNested ? "\u0412\u043b\u043e\u0436\u0435\u043d\u043d\u043e\u0435" : "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0435";
@@ -217,7 +277,19 @@ namespace FamilyMang
         public string original_filename => Family?.original_filename ?? "\u2014";
         public string StatusDisplay => Family?.StatusDisplay ?? "\u2014";
         public string SizeDisplay => Family?.SizeDisplay ?? "\u2014";
-        public string VersionDisplay => Family?.VersionDisplay ?? "v1";
+
+        /// <summary>Для host: максимальная версия в группе (host + nested).</summary>
+        public int? BundleVersion { get; set; }
+
+        public string VersionDisplay
+        {
+            get
+            {
+                if (BundleVersion.HasValue && !IsNested)
+                    return "v" + BundleVersion.Value;
+                return Family?.VersionDisplay ?? "v1";
+            }
+        }
     }
 
     public static class CatalogHierarchy
@@ -307,10 +379,10 @@ namespace FamilyMang
 
             return groups
                 .GroupBy(g => HostKey(g[0].Family), StringComparer.OrdinalIgnoreCase)
-                .Select(g =>
+                .Select(duplicateGroups =>
                 {
-                    var bestRoot = PickNewest(g.Select(row => row.Family));
-                    return g.First(gr => string.Equals(
+                    var bestRoot = PickNewest(duplicateGroups.Select(gr => gr[0].Family));
+                    return duplicateGroups.First(gr => string.Equals(
                         gr[0].Family.id, bestRoot.id, StringComparison.OrdinalIgnoreCase));
                 })
                 .OrderByDescending(g => g[0].Family.VersionNumber)

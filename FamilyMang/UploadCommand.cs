@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -76,8 +77,11 @@ namespace FamilyMang
                     return Result.Failed;
                 }
 
+                string hostThumbnailPath = FamilyThumbnailExporter.TryExport(doc);
+
                 string resultMessage = Task.Run(() =>
-                    UploadExtractedBundleAsync(settings, extracted)).GetAwaiter().GetResult();
+                    UploadExtractedBundleAsync(settings, extracted, hostThumbnailPath))
+                    .GetAwaiter().GetResult();
 
                 TaskDialog.Show("FamilyMang", resultMessage);
                 return Result.Succeeded;
@@ -91,7 +95,7 @@ namespace FamilyMang
         }
 
         private static async Task<string> UploadExtractedBundleAsync(
-            PluginSettings settings, ExtractedUploadBundle extracted)
+            PluginSettings settings, ExtractedUploadBundle extracted, string hostThumbnailPath)
         {
             using (var auth = new JwtAuthService(settings.ServerUrl, settings.CompanyId))
             using (var client = new ApiClient(auth))
@@ -110,7 +114,8 @@ namespace FamilyMang
                     client, primaryData,
                     parentFamilyId: null,
                     parentFamilyName: null,
-                    nestedPreview: nestedPreview).ConfigureAwait(false);
+                    nestedPreview: nestedPreview,
+                    thumbnailPath: hostThumbnailPath).ConfigureAwait(false);
 
                 int nestedOk = 0;
                 var nestedErrors = new List<string>(extracted.NestedErrors);
@@ -141,6 +146,9 @@ namespace FamilyMang
                     $"ID: {primaryResult.FamilyId}",
                     $"Вложенных: {nestedOk} из {extracted.Nested.Count}"
                 };
+
+                if (!string.IsNullOrWhiteSpace(primaryResult.ThumbnailNote))
+                    lines.Add(primaryResult.ThumbnailNote);
 
                 if (nestedVersionLines.Count > 0)
                 {
@@ -173,7 +181,8 @@ namespace FamilyMang
             ExtractedFamilyData data,
             string parentFamilyId,
             string parentFamilyName,
-            List<object> nestedPreview)
+            List<object> nestedPreview,
+            string thumbnailPath = null)
         {
             InitUploadResponseDto init;
             try
@@ -200,12 +209,23 @@ namespace FamilyMang
             var version = init.version > 0 ? init.version : 1;
             if (init.unchanged)
             {
+                string thumbNote = null;
+                if (data.IsPrimary)
+                {
+                    thumbNote = await FamilyThumbnailUpload.TryUploadHostThumbnailAsync(
+                        client, init.family_id, thumbnailPath, init).ConfigureAwait(false);
+                }
+
                 return new FamilyUploadResult
                 {
                     FamilyId = init.family_id,
                     Version = version,
                     IsNew = false,
-                    Unchanged = true
+                    Unchanged = true,
+                    ThumbnailNote = thumbNote ??
+                        (data.IsPrimary
+                            ? $"Семейство .rfa без изменений (v{version}); превью не обновлено"
+                            : null)
                 };
             }
 
@@ -266,12 +286,20 @@ namespace FamilyMang
                 throw new Exception($"Ошибка завершения загрузки:\n{ex.Message}", ex);
             }
 
+            string thumbnailNote = null;
+            if (data.IsPrimary)
+            {
+                thumbnailNote = await FamilyThumbnailUpload.TryUploadHostThumbnailAsync(
+                    client, init.family_id, thumbnailPath, init).ConfigureAwait(false);
+            }
+
             return new FamilyUploadResult
             {
                 FamilyId = init.family_id,
                 Version = version,
                 IsNew = init.is_new,
-                Unchanged = false
+                Unchanged = false,
+                ThumbnailNote = thumbnailNote
             };
         }
     }

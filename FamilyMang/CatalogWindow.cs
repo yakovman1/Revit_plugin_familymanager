@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -7,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace FamilyMang
 {
@@ -26,11 +28,18 @@ namespace FamilyMang
         private Button _nextBtn;
         private TextBlock _statusText;
         private TextBlock _pageText;
+        private ComboBox _filterCombo;
+        private Image _previewImage;
+        private TextBlock _previewTitle;
+        private TextBlock _previewHint;
 
         private int _offset;
         private int _total;
+        private int _previewRequestId;
         private List<FamilySummaryDto> _cachedFamilies;
         private List<List<CatalogFamilyRow>> _primaryGroups = new List<List<CatalogFamilyRow>>();
+        private readonly HashSet<string> _favoriteIds =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public string DownloadedFilePath { get; private set; }
 
@@ -45,9 +54,9 @@ namespace FamilyMang
         private void SetupWindow()
         {
             Title = "FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432";
-            Width = 960;
-            Height = 620;
-            MinWidth = 760;
+            Width = 1120;
+            Height = 640;
+            MinWidth = 900;
             MinHeight = 450;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             FontFamily = new FontFamily("Segoe UI");
@@ -73,10 +82,67 @@ namespace FamilyMang
             DockPanel.SetDock(pageBar, Dock.Bottom);
             root.Children.Add(pageBar);
 
-            _grid = BuildDataGrid();
-            root.Children.Add(_grid);
+            var center = BuildCenterPanel();
+            root.Children.Add(center);
 
             Content = root;
+        }
+
+        private Grid BuildCenterPanel()
+        {
+            var grid = new Grid { Margin = new Thickness(12, 6, 12, 4) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
+
+            _grid = BuildDataGrid();
+            Grid.SetColumn(_grid, 0);
+            grid.Children.Add(_grid);
+
+            var preview = BuildPreviewPanel();
+            Grid.SetColumn(preview, 1);
+            grid.Children.Add(preview);
+
+            return grid;
+        }
+
+        private Border BuildPreviewPanel()
+        {
+            var stack = new StackPanel { Margin = new Thickness(10, 0, 0, 0) };
+
+            _previewTitle = new TextBlock
+            {
+                Text = "\u041f\u0440\u0435\u0432\u044c\u044e",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            stack.Children.Add(_previewTitle);
+
+            _previewImage = new Image
+            {
+                Stretch = Stretch.Uniform,
+                Height = 240,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            stack.Children.Add(_previewImage);
+
+            _previewHint = new TextBlock
+            {
+                Text = "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u0432 \u0441\u043f\u0438\u0441\u043a\u0435",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 10, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120))
+            };
+            stack.Children.Add(_previewHint);
+
+            ClearPreview();
+
+            return new Border
+            {
+                Child = stack,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
+                BorderThickness = new Thickness(1, 0, 0, 0),
+                Padding = new Thickness(4, 0, 0, 0)
+            };
         }
 
         private Border BuildConnectionBar()
@@ -94,10 +160,10 @@ namespace FamilyMang
             grid.RowDefinitions.Add(new RowDefinition());
 
             Put(grid, Label("\u0421\u0435\u0440\u0432\u0435\u0440:"), 0, 0);
-            _urlBox = TextInput(); Put(grid, _urlBox, 0, 1);
+            _urlBox = CreateTextBox(); Put(grid, _urlBox, 0, 1);
 
             Put(grid, Label("Company ID:", 12), 0, 2);
-            _companyBox = TextInput(); Put(grid, _companyBox, 0, 3);
+            _companyBox = CreateTextBox(); Put(grid, _companyBox, 0, 3);
 
             Put(grid, Label("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:"), 2, 0);
             _userLabel = new TextBlock
@@ -106,8 +172,19 @@ namespace FamilyMang
                 VerticalAlignment = VerticalAlignment.Center,
                 Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80))
             };
-            Grid.SetColumnSpan(_userLabel, 3);
             Put(grid, _userLabel, 2, 1);
+
+            Put(grid, Label("\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c:", 12), 2, 2);
+            _filterCombo = new ComboBox
+            {
+                MinWidth = 140,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            _filterCombo.Items.Add("\u0412\u0441\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u0430");
+            _filterCombo.Items.Add("\u0422\u043e\u043b\u044c\u043a\u043e \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u044b\u0435");
+            _filterCombo.SelectedIndex = 0;
+            _filterCombo.SelectionChanged += OnFilterChanged;
+            Put(grid, _filterCombo, 2, 3);
 
             _connectBtn = Btn("\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a", true);
             _connectBtn.Margin = new Thickness(8, 0, 0, 0);
@@ -144,6 +221,7 @@ namespace FamilyMang
             };
 
             dg.LoadingRow += OnGridLoadingRow;
+            dg.Columns.Add(FavoriteColumn());
 
             dg.Columns.Add(TextCol("\u0420\u043e\u043b\u044c", "RoleDisplay", 0, 110));
             dg.Columns.Add(TextCol("\u0418\u043c\u044f \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u0430", "IndentedFamilyName", 2));
@@ -155,8 +233,40 @@ namespace FamilyMang
 
             dg.SelectionChanged += OnGridSelectionChanged;
             dg.PreviewMouseDown += OnGridPreviewMouseDown;
+            dg.MouseLeftButtonUp += OnGridMouseLeftButtonUp;
 
             return dg;
+        }
+
+        private static DataGridTemplateColumn FavoriteColumn()
+        {
+            var col = new DataGridTemplateColumn
+            {
+                Header = "\u2605",
+                Width = new DataGridLength(36)
+            };
+
+            var factory = new FrameworkElementFactory(typeof(Button));
+            factory.SetValue(Button.PaddingProperty, new Thickness(0));
+            factory.SetValue(Button.BorderThicknessProperty, new Thickness(0));
+            factory.SetValue(Button.BackgroundProperty, Brushes.Transparent);
+            factory.SetValue(Button.CursorProperty, Cursors.Hand);
+            factory.SetValue(Button.FontSizeProperty, 16.0);
+            factory.SetBinding(Button.ContentProperty, new Binding("FavoriteDisplay"));
+            factory.AddHandler(Button.ClickEvent, new RoutedEventHandler(OnFavoriteButtonClick));
+
+            col.CellTemplate = new DataTemplate { VisualTree = factory };
+            return col;
+        }
+
+        private static void OnFavoriteButtonClick(object sender, RoutedEventArgs e)
+        {
+            if (!(sender is Button btn) || !(btn.DataContext is CatalogFamilyRow row))
+                return;
+
+            var window = Window.GetWindow(btn) as CatalogWindow;
+            window?.ToggleFavoriteAsync(row);
+            e.Handled = true;
         }
 
         private void OnGridLoadingRow(object sender, DataGridRowEventArgs e)
@@ -182,13 +292,23 @@ namespace FamilyMang
                 return;
 
             if (_grid.SelectedItem is CatalogFamilyRow row && row.IsSelectable)
+            {
                 _loadBtn.IsEnabled = true;
+                _ = LoadPreviewForSelectionAsync(row);
+            }
             else
             {
                 _loadBtn.IsEnabled = false;
+                ClearPreview();
                 if (_grid.SelectedItem is CatalogFamilyRow nested && nested.IsNested)
                     _grid.SelectedItem = null;
             }
+        }
+
+        private void OnGridMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_grid.SelectedItem is CatalogFamilyRow row && row.IsSelectable)
+                _ = LoadPreviewForSelectionAsync(row);
         }
 
         private void OnGridPreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -292,7 +412,7 @@ namespace FamilyMang
             };
         }
 
-        private static TextBox TextInput()
+        private static TextBox CreateTextBox()
         {
             return new TextBox
             {
@@ -361,6 +481,15 @@ namespace FamilyMang
             PersistSettings();
             _offset = 0;
             _cachedFamilies = null;
+            _favoriteIds.Clear();
+            await LoadPageAsync();
+        }
+
+        private async void OnFilterChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_cachedFamilies == null || _cachedFamilies.Count == 0)
+                return;
+            _offset = 0;
             await LoadPageAsync();
         }
 
@@ -395,18 +524,26 @@ namespace FamilyMang
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
                     if (_cachedFamilies == null)
+                    {
                         _cachedFamilies = await client.GetAllFamiliesAsync().ConfigureAwait(true);
+                        await LoadFavoritesAsync(client).ConfigureAwait(true);
+                    }
 
                     _primaryGroups = CatalogHierarchy.BuildPrimaryGroups(_cachedFamilies);
-                    _total = _primaryGroups.Count;
+                    var visibleGroups = FilterGroups(_primaryGroups);
+                    _total = visibleGroups.Count;
 
-                    var pageGroups = _primaryGroups
+                    var pageGroups = visibleGroups
                         .Skip(_offset)
                         .Take(PageSize)
                         .ToList();
 
-                    var rows = pageGroups.SelectMany(g => g).ToList();
+                    var rows = pageGroups
+                        .SelectMany(g => ApplyBundleVersion(ToRowsWithFavorites(g).ToList()))
+                        .ToList();
                     _grid.ItemsSource = rows;
+                    _grid.SelectedItem = null;
+                    ClearPreview();
                     RefreshPagination();
 
                     int nestedOnPage = rows.Count(r => r.IsNested);
@@ -498,7 +635,191 @@ namespace FamilyMang
                 _grid.SelectedItem is CatalogFamilyRow r && r.IsSelectable;
             _urlBox.IsEnabled = !busy;
             _companyBox.IsEnabled = !busy;
+            if (_filterCombo != null)
+                _filterCombo.IsEnabled = !busy;
             Cursor = busy ? Cursors.Wait : null;
+        }
+
+        private bool ShowFavoritesOnly =>
+            _filterCombo != null && _filterCombo.SelectedIndex == 1;
+
+        private List<List<CatalogFamilyRow>> FilterGroups(List<List<CatalogFamilyRow>> groups)
+        {
+            if (!ShowFavoritesOnly)
+                return groups;
+
+            return groups
+                .Where(g => g.Count > 0 &&
+                            g[0].Family != null &&
+                            _favoriteIds.Contains(g[0].Family.id))
+                .ToList();
+        }
+
+        private IEnumerable<CatalogFamilyRow> ToRowsWithFavorites(List<CatalogFamilyRow> group)
+        {
+            foreach (var row in group)
+            {
+                if (row.Family != null && !row.IsNested)
+                    row.IsFavorite = _favoriteIds.Contains(row.Family.id);
+                yield return row;
+            }
+        }
+
+        private static IEnumerable<CatalogFamilyRow> ApplyBundleVersion(List<CatalogFamilyRow> group)
+        {
+            if (group == null || group.Count == 0)
+                return group;
+
+            var maxVer = group
+                .Where(r => r.Family != null)
+                .Select(r => r.Family.VersionNumber)
+                .DefaultIfEmpty(1)
+                .Max();
+
+            var host = group.FirstOrDefault(r => !r.IsNested);
+            if (host != null)
+                host.BundleVersion = maxVer;
+
+            return group;
+        }
+
+        private async Task LoadFavoritesAsync(ApiClient client)
+        {
+            _favoriteIds.Clear();
+            try
+            {
+                var response = await client.GetFavoritesAsync().ConfigureAwait(true);
+                if (response?.items == null)
+                    return;
+                foreach (var item in response.items)
+                {
+                    if (!string.IsNullOrWhiteSpace(item.family_id))
+                        _favoriteIds.Add(item.family_id);
+                }
+            }
+            catch
+            {
+                // закладки опциональны до реализации backend
+            }
+        }
+
+        private async Task ToggleFavoriteAsync(CatalogFamilyRow row)
+        {
+            if (row?.Family == null || row.IsNested)
+                return;
+
+            var familyId = row.Family.id;
+            PersistSettings();
+
+            try
+            {
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), _companyBox.Text.Trim()))
+                using (var client = new ApiClient(auth))
+                {
+                    client.BaseUrl = _urlBox.Text.Trim();
+
+                    if (row.IsFavorite)
+                    {
+                        await client.RemoveFavoriteAsync(familyId).ConfigureAwait(true);
+                        _favoriteIds.Remove(familyId);
+                        row.IsFavorite = false;
+                    }
+                    else
+                    {
+                        await client.AddFavoriteAsync(familyId).ConfigureAwait(true);
+                        _favoriteIds.Add(familyId);
+                        row.IsFavorite = true;
+                    }
+                }
+
+                if (ShowFavoritesOnly)
+                    await LoadPageAsync();
+            }
+            catch (Exception ex)
+            {
+                Status($"\u0417\u0430\u043a\u043b\u0430\u0434\u043a\u0438: {ex.Message}", true);
+            }
+        }
+
+        private void ClearPreview()
+        {
+            _previewImage.Source = null;
+            if (_previewTitle != null)
+                _previewTitle.Text = "\u041f\u0440\u0435\u0432\u044c\u044e";
+            if (_previewHint != null)
+                _previewHint.Text =
+                    "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u0432 \u0441\u043f\u0438\u0441\u043a\u0435";
+        }
+
+        private async Task LoadPreviewForSelectionAsync(CatalogFamilyRow row)
+        {
+            if (row?.Family == null || !row.IsSelectable)
+                return;
+
+            var family = row.Family;
+            var requestId = ++_previewRequestId;
+
+            _previewTitle.Text = family.FamilyName;
+            _previewHint.Text = "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u043f\u0440\u0435\u0432\u044c\u044e\u2026";
+            _previewImage.Source = null;
+
+            try
+            {
+                if (ThumbnailCache.TryGetExisting(family.id, out var cachedPath))
+                {
+                    if (requestId != _previewRequestId)
+                        return;
+                    ShowPreviewFromFile(cachedPath);
+                    _previewHint.Text = family.Category;
+                    return;
+                }
+
+                PersistSettings();
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), _companyBox.Text.Trim()))
+                using (var client = new ApiClient(auth))
+                {
+                    client.BaseUrl = _urlBox.Text.Trim();
+                    var url = await client.GetThumbnailUrlAsync(family.id).ConfigureAwait(true);
+                    if (requestId != _previewRequestId)
+                        return;
+
+                    if (string.IsNullOrWhiteSpace(url))
+                    {
+                        _previewHint.Text = family.HasThumbnail
+                            ? "\u041f\u0440\u0435\u0432\u044c\u044e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e (404)"
+                            : "\u041f\u0440\u0435\u0432\u044c\u044e \u043d\u0435\u0442. \u0412\u044b\u0433\u0440\u0443\u0437\u0438\u0442\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u0437\u0430\u043d\u043e\u0432\u043e \u043f\u043e\u0441\u043b\u0435 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f backend.";
+                        return;
+                    }
+
+                    var bytes = await client.DownloadThumbnailBytesAsync(url).ConfigureAwait(true);
+                    if (requestId != _previewRequestId)
+                        return;
+
+                    ThumbnailCache.Write(family.id, bytes);
+                    ShowPreviewFromFile(ThumbnailCache.GetFilePath(family.id));
+                    _previewHint.Text = family.Category;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (requestId != _previewRequestId)
+                    return;
+                _previewHint.Text = $"\u041f\u0440\u0435\u0432\u044c\u044e: {ex.Message}";
+            }
+        }
+
+        private void ShowPreviewFromFile(string path)
+        {
+            if (!File.Exists(path))
+                return;
+
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(path, UriKind.Absolute);
+            bitmap.EndInit();
+            bitmap.Freeze();
+            _previewImage.Source = bitmap;
         }
 
         #endregion

@@ -145,6 +145,104 @@ namespace FamilyMang
             }
         }
 
+        public async Task<ListFavoritesResponseDto> GetFavoritesAsync()
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                       new HttpRequestMessage(HttpMethod.Get, Url("/families/favorites")))
+                   .ConfigureAwait(false))
+            {
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                return _json.Deserialize<ListFavoritesResponseDto>(body)
+                       ?? new ListFavoritesResponseDto();
+            }
+        }
+
+        public async Task AddFavoriteAsync(string familyId)
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                   {
+                       var request = new HttpRequestMessage(HttpMethod.Post, Url("/families/favorites"))
+                       {
+                           Content = JsonBody(new { family_id = familyId })
+                       };
+                       return request;
+                   }).ConfigureAwait(false))
+            {
+                resp.EnsureSuccessStatusCode();
+            }
+        }
+
+        public async Task RemoveFavoriteAsync(string familyId)
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                       new HttpRequestMessage(HttpMethod.Delete,
+                           Url($"/families/favorites/{familyId}")))
+                   .ConfigureAwait(false))
+            {
+                if (resp.StatusCode == HttpStatusCode.NoContent ||
+                    resp.StatusCode == HttpStatusCode.OK)
+                    return;
+                resp.EnsureSuccessStatusCode();
+            }
+        }
+
+        public async Task<string> GetThumbnailUrlAsync(string familyId)
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                       new HttpRequestMessage(HttpMethod.Get,
+                           Url($"/families/{familyId}/thumbnail-url")))
+                   .ConfigureAwait(false))
+            {
+                if (resp.StatusCode == HttpStatusCode.NotFound)
+                    return null;
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                return _json.Deserialize<ThumbnailUrlResponseDto>(body)?.presigned_get_url;
+            }
+        }
+
+        public async Task<ThumbnailInitResponseDto> InitThumbnailUploadAsync(string familyId)
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                       new HttpRequestMessage(HttpMethod.Post,
+                           Url($"/families/{familyId}/thumbnail/init-upload")))
+                   .ConfigureAwait(false))
+            {
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                return _json.Deserialize<ThumbnailInitResponseDto>(body);
+            }
+        }
+
+        public async Task CompleteThumbnailUploadAsync(string familyId)
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                       new HttpRequestMessage(HttpMethod.Post,
+                           Url($"/families/{familyId}/thumbnail/complete")))
+                   .ConfigureAwait(false))
+            {
+                resp.EnsureSuccessStatusCode();
+            }
+        }
+
+        public async Task<byte[]> DownloadThumbnailBytesAsync(string presignedUrl)
+        {
+            ClearAuth();
+            try
+            {
+                using (var resp = await _http.GetAsync(presignedUrl).ConfigureAwait(false))
+                {
+                    resp.EnsureSuccessStatusCode();
+                    return await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                ClearAuth();
+            }
+        }
+
         #endregion
 
         #region Upload (family → backend)
@@ -187,13 +285,25 @@ namespace FamilyMang
 
         public async Task<string> UploadToS3Async(string presignedPutUrl, string filePath)
         {
+            return await UploadToS3Async(
+                presignedPutUrl, filePath, "application/octet-stream").ConfigureAwait(false);
+        }
+
+        public async Task UploadThumbnailToS3Async(string presignedPutUrl, string filePath)
+        {
+            await UploadToS3Async(presignedPutUrl, filePath, "image/png").ConfigureAwait(false);
+        }
+
+        private async Task<string> UploadToS3Async(
+            string presignedPutUrl, string filePath, string contentType)
+        {
             ClearAuth();
             try
             {
                 using (var fs = File.OpenRead(filePath))
                 {
                     var content = new StreamContent(fs);
-                    content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                    content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
 
                     var request = new HttpRequestMessage(HttpMethod.Put, presignedPutUrl)
                     {
