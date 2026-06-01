@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -114,6 +115,72 @@ namespace FamilyMang
         }
 
         public string Category => GetMetadataValue("category") ?? "\u2014";
+
+        /// <summary>ADSK_Завод-изготовитель из metadata.types[].values (первый непустой тип).</summary>
+        public string Manufacturer => GetManufacturerParameterValue();
+
+        private string GetManufacturerParameterValue()
+        {
+            if (metadata_json == null || !metadata_json.ContainsKey("types"))
+                return null;
+
+            foreach (var typeEntry in EnumerateMetadataObjects(metadata_json["types"]))
+            {
+                if (!(typeEntry is Dictionary<string, object> typeDict))
+                    continue;
+                if (!typeDict.TryGetValue("values", out var valuesObj))
+                    continue;
+
+                var value = ReadParameterFromValues(valuesObj, CatalogCategories.ManufacturerParameterName);
+                if (!string.IsNullOrWhiteSpace(value))
+                    return value.Trim();
+            }
+
+            return null;
+        }
+
+        private static string ReadParameterFromValues(object valuesObj, string parameterName)
+        {
+            if (!(valuesObj is Dictionary<string, object> values))
+                return null;
+
+            if (values.TryGetValue(parameterName, out var direct))
+                return direct?.ToString();
+
+            foreach (var pair in values)
+            {
+                if (string.Equals(pair.Key, parameterName, StringComparison.OrdinalIgnoreCase))
+                    return pair.Value?.ToString();
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<object> EnumerateMetadataObjects(object listObj)
+        {
+            if (listObj == null)
+                yield break;
+
+            if (listObj is object[] array)
+            {
+                foreach (var item in array)
+                    yield return item;
+                yield break;
+            }
+
+            if (listObj is ArrayList list)
+            {
+                foreach (var item in list)
+                    yield return item;
+                yield break;
+            }
+
+            if (listObj is IEnumerable enumerable && !(listObj is string))
+            {
+                foreach (var item in enumerable)
+                    yield return item;
+            }
+        }
 
         public string SizeDisplay
         {
@@ -241,10 +308,48 @@ namespace FamilyMang
     public class CatalogFamilyRow : INotifyPropertyChanged
     {
         private bool _isFavorite;
+        private bool _isExpanded;
+        private int _nestedCount;
 
         public FamilySummaryDto Family { get; set; }
         public bool IsNested { get; set; }
-        public bool IsSelectable => !IsNested;
+        public bool IsHostRow => !IsNested;
+        public string HostFamilyId { get; set; }
+        public bool IsSelectable => IsHostRow;
+
+        public int NestedCount
+        {
+            get => _nestedCount;
+            set
+            {
+                if (_nestedCount == value)
+                    return;
+                _nestedCount = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(ExpandGlyph));
+                OnPropertyChanged(nameof(IndentedFamilyName));
+                OnPropertyChanged(nameof(RoleDisplay));
+            }
+        }
+
+        public bool IsExpanded
+        {
+            get => _isExpanded;
+            set
+            {
+                if (_isExpanded == value)
+                    return;
+                _isExpanded = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(ExpandGlyph));
+                OnPropertyChanged(nameof(IndentedFamilyName));
+            }
+        }
+
+        public string ExpandGlyph =>
+            !IsHostRow || NestedCount <= 0
+                ? ""
+                : IsExpanded ? "\u25BC " : "\u25B6 ";
 
         public bool IsFavorite
         {
@@ -266,12 +371,21 @@ namespace FamilyMang
         private void OnPropertyChanged([CallerMemberName] string name = null) =>
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
-        public string RoleDisplay =>
-            IsNested ? "\u0412\u043b\u043e\u0436\u0435\u043d\u043d\u043e\u0435" : "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0435";
+        public string RoleDisplay
+        {
+            get
+            {
+                if (IsNested)
+                    return "\u0412\u043b\u043e\u0436\u0435\u043d\u043d\u043e\u0435";
+                if (NestedCount > 0)
+                    return "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 (" + NestedCount + ")";
+                return "\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0435";
+            }
+        }
 
         public string FamilyName => Family?.FamilyName ?? "\u2014";
         public string IndentedFamilyName =>
-            IsNested ? "    " + FamilyName : FamilyName;
+            IsNested ? "        " + FamilyName : ExpandGlyph + FamilyName;
 
         public string Category => Family?.Category ?? "\u2014";
         public string original_filename => Family?.original_filename ?? "\u2014";

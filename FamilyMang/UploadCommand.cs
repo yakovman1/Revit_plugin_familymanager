@@ -123,6 +123,7 @@ namespace FamilyMang
 
                 var primaryResult = await UploadSingleAsync(
                     client, primaryData,
+                    settings.CompanyId,
                     parentFamilyId: null,
                     parentFamilyName: null,
                     nestedPreview: nestedPreview,
@@ -138,6 +139,7 @@ namespace FamilyMang
                     {
                         var nestedResult = await UploadSingleAsync(
                             client, nestedData,
+                            settings.CompanyId,
                             parentFamilyId: primaryResult.FamilyId,
                             parentFamilyName: primaryData.FamilyName,
                             nestedPreview: null).ConfigureAwait(false);
@@ -192,6 +194,7 @@ namespace FamilyMang
         private static async Task<FamilyUploadResult> UploadSingleAsync(
             ApiClient client,
             ExtractedFamilyData data,
+            string companyId,
             string parentFamilyId,
             string parentFamilyName,
             List<object> nestedPreview,
@@ -260,7 +263,9 @@ namespace FamilyMang
             {
                 { "is_primary", data.IsPrimary },
                 { "role", data.IsPrimary ? "host" : "nested" },
-                { "version", version }
+                { "version", version },
+                { "uploaded_by_company_id", companyId ?? "" },
+                { "uploaded_by_windows_user", Environment.UserName }
             };
 
             if (!string.IsNullOrEmpty(parentFamilyId))

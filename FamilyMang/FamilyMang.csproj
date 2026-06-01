@@ -59,6 +59,8 @@
     <Compile Include="ApiClient.cs" />
     <Compile Include="App.cs" />
     <Compile Include="CatalogCommand.cs" />
+    <Compile Include="CatalogCategories.cs" />
+    <Compile Include="CatalogSearch.cs" />
     <Compile Include="CatalogWindow.cs" />
     <Compile Include="Command.cs" />
     <Compile Include="FamilyExtractor.cs" />

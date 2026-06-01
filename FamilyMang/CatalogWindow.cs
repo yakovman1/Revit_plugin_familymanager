@@ -9,6 +9,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace FamilyMang
 {
@@ -29,6 +30,12 @@ namespace FamilyMang
         private TextBlock _statusText;
         private TextBlock _pageText;
         private ComboBox _filterCombo;
+        private TextBox _searchBox;
+        private Button _clearSearchBtn;
+        private DispatcherTimer _searchDebounceTimer;
+        private TreeView _categoryTree;
+        private string _selectedCategoryKey = CatalogCategories.AllKey;
+        private bool _suppressCategoryTreeEvent;
         private Image _previewImage;
         private TextBlock _previewTitle;
         private TextBlock _previewHint;
@@ -40,6 +47,10 @@ namespace FamilyMang
         private List<List<CatalogFamilyRow>> _primaryGroups = new List<List<CatalogFamilyRow>>();
         private readonly HashSet<string> _favoriteIds =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _expandedHostIds =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private List<List<CatalogFamilyRow>> _currentPageGroups = new List<List<CatalogFamilyRow>>();
+        private string _selectedHostFamilyId;
 
         public string DownloadedFilePath { get; private set; }
 
@@ -54,9 +65,9 @@ namespace FamilyMang
         private void SetupWindow()
         {
             Title = "FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432";
-            Width = 1120;
+            Width = 1280;
             Height = 640;
-            MinWidth = 900;
+            MinWidth = 1020;
             MinHeight = 450;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             FontFamily = new FontFamily("Segoe UI");
@@ -91,18 +102,246 @@ namespace FamilyMang
         private Grid BuildCenterPanel()
         {
             var grid = new Grid { Margin = new Thickness(12, 6, 12, 4) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(240) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
 
+            var categoryPanel = BuildCategoryTreePanel();
+            Grid.SetColumn(categoryPanel, 0);
+            grid.Children.Add(categoryPanel);
+
+            var listPanel = new Grid();
+            listPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            listPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var searchBar = BuildSearchBar();
+            Grid.SetRow(searchBar, 0);
+            listPanel.Children.Add(searchBar);
+
             _grid = BuildDataGrid();
-            Grid.SetColumn(_grid, 0);
-            grid.Children.Add(_grid);
+            _grid.Margin = new Thickness(0, 4, 0, 4);
+            Grid.SetRow(_grid, 1);
+            listPanel.Children.Add(_grid);
+
+            listPanel.Margin = new Thickness(8, 0, 8, 4);
+            Grid.SetColumn(listPanel, 1);
+            grid.Children.Add(listPanel);
 
             var preview = BuildPreviewPanel();
-            Grid.SetColumn(preview, 1);
+            Grid.SetColumn(preview, 2);
             grid.Children.Add(preview);
 
             return grid;
+        }
+
+        private Border BuildSearchBar()
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var label = Label("\u041f\u043e\u0438\u0441\u043a:");
+            label.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(label, 0);
+            grid.Children.Add(label);
+
+            _searchBox = CreateTextBox();
+            _searchBox.Margin = new Thickness(8, 0, 4, 0);
+            _searchBox.ToolTip =
+                "\u0418\u043c\u044f \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u0430, \u0444\u0430\u0439\u043b, \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f, \u0437\u0430\u0432\u043e\u0434.\n" +
+                "\u041d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0441\u043b\u043e\u0432 \u2014 \u0432\u0441\u0435 \u0441\u043b\u043e\u0432\u0430 \u0434\u043e\u043b\u0436\u043d\u044b \u0432\u0441\u0442\u0440\u0435\u0447\u0430\u0442\u044c\u0441\u044f.";
+            _searchBox.TextChanged += OnSearchTextChanged;
+            Grid.SetColumn(_searchBox, 1);
+            grid.Children.Add(_searchBox);
+
+            _clearSearchBtn = Btn("\u2715", false);
+            _clearSearchBtn.Padding = new Thickness(8, 4, 8, 4);
+            _clearSearchBtn.Margin = new Thickness(0);
+            _clearSearchBtn.IsEnabled = false;
+            _clearSearchBtn.ToolTip = "\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u043f\u043e\u0438\u0441\u043a";
+            _clearSearchBtn.Click += OnClearSearchClick;
+            Grid.SetColumn(_clearSearchBtn, 2);
+            grid.Children.Add(_clearSearchBtn);
+
+            _searchDebounceTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(280)
+            };
+            _searchDebounceTimer.Tick += OnSearchDebounceTick;
+
+            return new Border
+            {
+                Child = grid,
+                Padding = new Thickness(0, 0, 0, 2)
+            };
+        }
+
+        private Border BuildCategoryTreePanel()
+        {
+            var root = new DockPanel();
+
+            var header = new TextBlock
+            {
+                Text = "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 8),
+                Foreground = new SolidColorBrush(Color.FromRgb(60, 60, 60))
+            };
+            DockPanel.SetDock(header, Dock.Top);
+            root.Children.Add(header);
+
+            _categoryTree = new TreeView
+            {
+                BorderThickness = new Thickness(0),
+                Background = Brushes.White,
+                Padding = new Thickness(4, 2, 4, 2)
+            };
+            _categoryTree.SelectedItemChanged += OnCategoryTreeSelectionChanged;
+
+            var scroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = _categoryTree
+            };
+            root.Children.Add(scroll);
+
+            return new Border
+            {
+                Child = root,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
+                BorderThickness = new Thickness(0, 0, 1, 0),
+                Padding = new Thickness(0, 0, 8, 0),
+                Background = new SolidColorBrush(Color.FromRgb(252, 252, 252))
+            };
+        }
+
+        private void RebuildCategoryTree(List<List<CatalogFamilyRow>> allGroups)
+        {
+            if (_categoryTree == null)
+                return;
+
+            _suppressCategoryTreeEvent = true;
+            var folders = CatalogCategories.BuildFolderTree(allGroups);
+            _categoryTree.Items.Clear();
+
+            foreach (var folder in folders)
+                _categoryTree.Items.Add(CreateFolderTreeItem(folder));
+
+            if (!string.IsNullOrWhiteSpace(_selectedCategoryKey) &&
+                !TrySelectTreeItemByKey(_selectedCategoryKey))
+            {
+                _selectedCategoryKey = CatalogCategories.AllKey;
+                TrySelectTreeItemByKey(_selectedCategoryKey);
+            }
+            else if (_categoryTree.Items.Count > 0 && _categoryTree.SelectedItem == null)
+            {
+                _selectedCategoryKey = CatalogCategories.AllKey;
+                TrySelectTreeItemByKey(_selectedCategoryKey);
+            }
+
+            _suppressCategoryTreeEvent = false;
+        }
+
+        private TreeViewItem CreateFolderTreeItem(CategoryFolderItem folder)
+        {
+            var item = new TreeViewItem
+            {
+                Header = CreateCategoryHeader(folder),
+                Tag = folder,
+                Padding = new Thickness(2, 4, 2, 4),
+                IsExpanded = folder.IsAll || folder.Children.Count > 0
+            };
+
+            foreach (var child in folder.Children)
+                item.Items.Add(CreateFolderTreeItem(child));
+
+            return item;
+        }
+
+        private bool TrySelectTreeItemByKey(string filterKey)
+        {
+            foreach (TreeViewItem root in _categoryTree.Items)
+            {
+                if (TrySelectTreeItemByKey(root, filterKey))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool TrySelectTreeItemByKey(TreeViewItem node, string filterKey)
+        {
+            if (node.Tag is CategoryFolderItem folder &&
+                string.Equals(folder.Key, filterKey, StringComparison.OrdinalIgnoreCase))
+            {
+                node.IsSelected = true;
+                node.BringIntoView();
+                return true;
+            }
+
+            foreach (TreeViewItem child in node.Items)
+            {
+                if (TrySelectTreeItemByKey(child, filterKey))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void ClearCategoryTree()
+        {
+            if (_categoryTree != null)
+                _categoryTree.Items.Clear();
+        }
+
+        private static StackPanel CreateCategoryHeader(CategoryFolderItem folder)
+        {
+            var icon = folder.IsAll ? "\uD83D\uDCC1 "
+                : folder.IsManufacturerNode ? "\uD83C\uDFED "
+                : "\uD83D\uDCC2 ";
+
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            panel.Children.Add(new TextBlock
+            {
+                Text = icon,
+                Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = folder.FolderLabel,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = folder.IsManufacturerNode
+                    ? folder.CategoryName + " \u2192 " + folder.DisplayName
+                    : folder.DisplayName
+            });
+            return panel;
+        }
+
+        private async void OnCategoryTreeSelectionChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+        {
+            if (_suppressCategoryTreeEvent)
+                return;
+
+            if (_categoryTree?.SelectedItem is TreeViewItem node &&
+                node.Tag is CategoryFolderItem folder)
+            {
+                if (string.Equals(_selectedCategoryKey, folder.Key, StringComparison.OrdinalIgnoreCase))
+                    return;
+                _selectedCategoryKey = folder.Key;
+            }
+            else
+            {
+                return;
+            }
+
+            if (_cachedFamilies == null || _cachedFamilies.Count == 0)
+                return;
+
+            _offset = 0;
+            await LoadPageAsync();
         }
 
         private Border BuildPreviewPanel()
@@ -162,8 +401,15 @@ namespace FamilyMang
             Put(grid, Label("\u0421\u0435\u0440\u0432\u0435\u0440:"), 0, 0);
             _urlBox = CreateTextBox(); Put(grid, _urlBox, 0, 1);
 
-            Put(grid, Label("Company ID:", 12), 0, 2);
-            _companyBox = CreateTextBox(); Put(grid, _companyBox, 0, 3);
+            var companyLabel = Label("Company ID:", 12);
+            companyLabel.ToolTip =
+                "\u0414\u043b\u044f \u0432\u0445\u043e\u0434\u0430 \u0438 \u0430\u0443\u0434\u0438\u0442\u0430 (\u043a\u0442\u043e \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u043b).\n" +
+                "\u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432 \u043e\u0431\u0449\u0438\u0439 \u2014 Company ID \u043d\u0435 \u0440\u0430\u0437\u0434\u0435\u043b\u044f\u0435\u0442 \u0431\u0430\u0437\u0443.\n" +
+                "\u041d\u0443\u0436\u043d\u0430 \u0437\u0430\u043f\u0438\u0441\u044c \u0432 atptlp_info.company_users \u0434\u043b\u044f \u0432\u0430\u0448\u0435\u0433\u043e Windows-\u043b\u043e\u0433\u0438\u043d\u0430.";
+            Put(grid, companyLabel, 0, 2);
+            _companyBox = CreateTextBox();
+            _companyBox.ToolTip = companyLabel.ToolTip;
+            Put(grid, _companyBox, 0, 3);
 
             Put(grid, Label("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:"), 2, 0);
             _userLabel = new TextBlock
@@ -213,12 +459,20 @@ namespace FamilyMang
                 HeadersVisibility = DataGridHeadersVisibility.Column,
                 HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
                 RowBackground = Brushes.White,
-                AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(247, 249, 252)),
+                AlternatingRowBackground = Brushes.White,
                 BorderThickness = new Thickness(1),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
                 Margin = new Thickness(12, 6, 12, 4),
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                RowStyle = BuildGridRowStyle()
             };
+
+            dg.Resources[SystemColors.HighlightBrushKey] =
+                new SolidColorBrush(Color.FromRgb(228, 228, 228));
+            dg.Resources[SystemColors.HighlightTextBrushKey] = Brushes.Black;
+            dg.Resources[SystemColors.InactiveSelectionHighlightBrushKey] =
+                new SolidColorBrush(Color.FromRgb(240, 240, 240));
+            dg.Resources[SystemColors.InactiveSelectionHighlightTextBrushKey] = Brushes.Black;
 
             dg.LoadingRow += OnGridLoadingRow;
             dg.Columns.Add(FavoriteColumn());
@@ -269,20 +523,80 @@ namespace FamilyMang
             e.Handled = true;
         }
 
+        private static Style BuildGridRowStyle()
+        {
+            var style = new Style(typeof(DataGridRow));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.White));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Color.FromRgb(30, 30, 30))));
+
+            var selected = new Trigger
+            {
+                Property = DataGridRow.IsSelectedProperty,
+                Value = true
+            };
+            selected.Setters.Add(new Setter(Control.BackgroundProperty,
+                new SolidColorBrush(Color.FromRgb(228, 228, 228))));
+            selected.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
+            selected.Setters.Add(new Setter(Control.BorderBrushProperty,
+                new SolidColorBrush(Color.FromRgb(90, 90, 90))));
+            selected.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(3, 0, 0, 0)));
+            style.Triggers.Add(selected);
+
+            return style;
+        }
+
         private void OnGridLoadingRow(object sender, DataGridRowEventArgs e)
         {
             if (!(e.Row.Item is CatalogFamilyRow row))
                 return;
 
+            ApplyRowVisual(e.Row, row);
+        }
+
+        private void ApplyRowVisual(DataGridRow gridRow, CatalogFamilyRow row)
+        {
             if (row.IsNested)
             {
-                e.Row.IsEnabled = false;
-                e.Row.Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110));
-                e.Row.Background = new SolidColorBrush(Color.FromRgb(248, 248, 248));
+                gridRow.IsEnabled = false;
+                gridRow.FontWeight = FontWeights.Normal;
+                gridRow.FontSize = 12.5;
+                gridRow.Foreground = new SolidColorBrush(Color.FromRgb(100, 100, 100));
+                gridRow.Background = new SolidColorBrush(Color.FromRgb(250, 250, 250));
+                return;
+            }
+
+            gridRow.FontWeight = FontWeights.SemiBold;
+            gridRow.FontSize = 13;
+
+            var isSelected = !string.IsNullOrEmpty(_selectedHostFamilyId) &&
+                             row.Family != null &&
+                             string.Equals(row.Family.id, _selectedHostFamilyId, StringComparison.OrdinalIgnoreCase);
+
+            if (isSelected)
+            {
+                gridRow.Background = new SolidColorBrush(Color.FromRgb(228, 228, 228));
+                gridRow.Foreground = Brushes.Black;
+                gridRow.BorderBrush = new SolidColorBrush(Color.FromRgb(90, 90, 90));
+                gridRow.BorderThickness = new Thickness(3, 0, 0, 0);
             }
             else
             {
-                e.Row.FontWeight = FontWeights.SemiBold;
+                gridRow.Background = Brushes.White;
+                gridRow.Foreground = new SolidColorBrush(Color.FromRgb(30, 30, 30));
+                gridRow.BorderThickness = new Thickness(0);
+            }
+        }
+
+        private void RefreshGridRowVisuals()
+        {
+            if (_grid == null)
+                return;
+
+            foreach (var item in _grid.Items)
+            {
+                var container = _grid.ItemContainerGenerator.ContainerFromItem(item) as DataGridRow;
+                if (container?.Item is CatalogFamilyRow row)
+                    ApplyRowVisual(container, row);
             }
         }
 
@@ -291,38 +605,118 @@ namespace FamilyMang
             if (_loadBtn == null)
                 return;
 
-            if (_grid.SelectedItem is CatalogFamilyRow row && row.IsSelectable)
+            if (_grid.SelectedItem is CatalogFamilyRow row && row.IsHostRow)
             {
+                _selectedHostFamilyId = row.Family?.id;
                 _loadBtn.IsEnabled = true;
+                RefreshGridRowVisuals();
                 _ = LoadPreviewForSelectionAsync(row);
             }
             else
             {
+                _selectedHostFamilyId = null;
                 _loadBtn.IsEnabled = false;
+                RefreshGridRowVisuals();
                 ClearPreview();
-                if (_grid.SelectedItem is CatalogFamilyRow nested && nested.IsNested)
-                    _grid.SelectedItem = null;
             }
         }
 
         private void OnGridMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (_grid.SelectedItem is CatalogFamilyRow row && row.IsSelectable)
+            if (TryGetRowFromClick(e, out var row) && row.IsHostRow)
+            {
+                if (row.NestedCount > 0 && !string.IsNullOrWhiteSpace(row.Family?.id))
+                    ToggleHostExpanded(row.Family.id);
+
+                _selectedHostFamilyId = row.Family?.id;
+                _grid.SelectedItem = row;
+                _loadBtn.IsEnabled = true;
+                RefreshGridRowVisuals();
                 _ = LoadPreviewForSelectionAsync(row);
+            }
         }
 
         private void OnGridPreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
+            if (TryGetRowFromClick(e, out var row) && row.IsNested)
+                e.Handled = true;
+        }
+
+        private bool TryGetRowFromClick(MouseButtonEventArgs e, out CatalogFamilyRow row)
+        {
+            row = null;
             var dep = e.OriginalSource as DependencyObject;
             while (dep != null && !(dep is DataGridRow))
                 dep = VisualTreeHelper.GetParent(dep);
 
-            if (dep is DataGridRow row &&
-                row.Item is CatalogFamilyRow item &&
-                item.IsNested)
+            if (dep is DataGridRow gridRow && gridRow.Item is CatalogFamilyRow item)
             {
-                e.Handled = true;
+                row = item;
+                return true;
             }
+
+            return false;
+        }
+
+        private void ToggleHostExpanded(string hostFamilyId)
+        {
+            if (string.IsNullOrWhiteSpace(hostFamilyId))
+                return;
+
+            if (_expandedHostIds.Contains(hostFamilyId))
+                _expandedHostIds.Remove(hostFamilyId);
+            else
+                _expandedHostIds.Add(hostFamilyId);
+
+            RebindCurrentPageGrid(hostFamilyId);
+        }
+
+        private void RebindCurrentPageGrid(string selectHostFamilyId = null)
+        {
+            if (_currentPageGroups == null || _currentPageGroups.Count == 0)
+                return;
+
+            var rows = FlattenGroupsForGrid(_currentPageGroups);
+            _grid.ItemsSource = rows;
+
+            if (!string.IsNullOrWhiteSpace(selectHostFamilyId))
+            {
+                var selected = rows.FirstOrDefault(r =>
+                    r.IsHostRow &&
+                    string.Equals(r.Family?.id, selectHostFamilyId, StringComparison.OrdinalIgnoreCase));
+                _grid.SelectedItem = selected;
+                _selectedHostFamilyId = selected?.Family?.id;
+            }
+
+            RefreshGridRowVisuals();
+        }
+
+        private List<CatalogFamilyRow> FlattenGroupsForGrid(IEnumerable<List<CatalogFamilyRow>> groups)
+        {
+            var result = new List<CatalogFamilyRow>();
+            foreach (var group in groups)
+            {
+                var prepared = ApplyBundleVersion(ToRowsWithFavorites(group.ToList()));
+                var host = prepared.FirstOrDefault(r => r.IsHostRow);
+                if (host?.Family == null)
+                    continue;
+
+                var nested = prepared.Where(r => r.IsNested).ToList();
+                var hostId = host.Family.id;
+
+                host.HostFamilyId = hostId;
+                host.NestedCount = nested.Count;
+                host.IsExpanded = nested.Count > 0 && _expandedHostIds.Contains(hostId);
+
+                foreach (var child in nested)
+                    child.HostFamilyId = hostId;
+
+                result.Add(host);
+                if (host.IsExpanded)
+                    result.AddRange(nested);
+            }
+
+            return result;
         }
 
         private StackPanel BuildPaginationBar()
@@ -482,6 +876,13 @@ namespace FamilyMang
             _offset = 0;
             _cachedFamilies = null;
             _favoriteIds.Clear();
+            _expandedHostIds.Clear();
+            _selectedCategoryKey = CatalogCategories.AllKey;
+            _searchDebounceTimer?.Stop();
+            if (_searchBox != null)
+                _searchBox.Text = "";
+            if (_clearSearchBtn != null)
+                _clearSearchBtn.IsEnabled = false;
             await LoadPageAsync();
         }
 
@@ -490,6 +891,47 @@ namespace FamilyMang
             if (_cachedFamilies == null || _cachedFamilies.Count == 0)
                 return;
             _offset = 0;
+            RebuildCategoryTree(GetGroupsForCategoryTree());
+            await LoadPageAsync();
+        }
+
+        private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_clearSearchBtn != null)
+                _clearSearchBtn.IsEnabled = !string.IsNullOrWhiteSpace(_searchBox?.Text);
+
+            if (_cachedFamilies == null || _cachedFamilies.Count == 0)
+                return;
+
+            _searchDebounceTimer?.Stop();
+            _searchDebounceTimer?.Start();
+        }
+
+        private async void OnSearchDebounceTick(object sender, EventArgs e)
+        {
+            _searchDebounceTimer?.Stop();
+            if (_cachedFamilies == null || _cachedFamilies.Count == 0)
+                return;
+
+            _offset = 0;
+            RebuildCategoryTree(GetGroupsForCategoryTree());
+            await LoadPageAsync();
+        }
+
+        private async void OnClearSearchClick(object sender, RoutedEventArgs e)
+        {
+            if (_searchBox == null)
+                return;
+
+            _searchDebounceTimer?.Stop();
+            _searchBox.Text = "";
+            _clearSearchBtn.IsEnabled = false;
+
+            if (_cachedFamilies == null || _cachedFamilies.Count == 0)
+                return;
+
+            _offset = 0;
+            RebuildCategoryTree(GetGroupsForCategoryTree());
             await LoadPageAsync();
         }
 
@@ -523,47 +965,54 @@ namespace FamilyMang
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
-                    if (_cachedFamilies == null)
+                    var isNewCatalogLoad = _cachedFamilies == null;
+                    if (isNewCatalogLoad)
                     {
                         _cachedFamilies = await client.GetAllFamiliesAsync().ConfigureAwait(true);
                         await LoadFavoritesAsync(client).ConfigureAwait(true);
                     }
 
                     _primaryGroups = CatalogHierarchy.BuildPrimaryGroups(_cachedFamilies);
+                    if (isNewCatalogLoad)
+                        RebuildCategoryTree(GetGroupsForCategoryTree());
                     var visibleGroups = FilterGroups(_primaryGroups);
                     _total = visibleGroups.Count;
 
-                    var pageGroups = visibleGroups
+                    _currentPageGroups = visibleGroups
                         .Skip(_offset)
                         .Take(PageSize)
                         .ToList();
 
-                    var rows = pageGroups
-                        .SelectMany(g => ApplyBundleVersion(ToRowsWithFavorites(g).ToList()))
-                        .ToList();
+                    ApplySearchExpansionHints(_currentPageGroups);
+                    var rows = FlattenGroupsForGrid(_currentPageGroups);
                     _grid.ItemsSource = rows;
                     _grid.SelectedItem = null;
+                    _selectedHostFamilyId = null;
                     ClearPreview();
                     RefreshPagination();
 
                     int nestedOnPage = rows.Count(r => r.IsNested);
                     int primaryOnPage = rows.Count - nestedOnPage;
+                    var filterHint = FormatActiveFiltersHint();
+                    var accessHint = BuildCatalogAccessHint(auth, _cachedFamilies);
                     Status(
                         $"\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e \u0433\u0440\u0443\u043f\u043f: {primaryOnPage} \u043e\u0441\u043d\u043e\u0432\u043d\u044b\u0445" +
                         (nestedOnPage > 0 ? $", {nestedOnPage} \u0432\u043b\u043e\u0436\u0435\u043d\u043d\u044b\u0445" : "") +
-                        $" (\u0432\u0441\u0435\u0433\u043e \u0432 \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435: {_total})",
+                        $" (\u0432\u0441\u0435\u0433\u043e: {_total}{filterHint}){accessHint}",
                         false);
                 }
             }
             catch (AuthException ex)
             {
                 Status(ex.StatusCode == 403
-                    ? "\u041e\u0448\u0438\u0431\u043a\u0430: Company ID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d \u0438\u043b\u0438 \u0434\u043e\u0441\u0442\u0443\u043f \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d"
+                    ? "\u0414\u043e\u0441\u0442\u0443\u043f \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d: \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 " + Environment.UserName +
+                      " \u0432 atptlp_info.company_users \u0434\u043b\u044f Company ID \"" + _companyBox.Text.Trim() + "\""
                     : $"\u041e\u0448\u0438\u0431\u043a\u0430 \u0430\u0443\u0442\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u0438: {ex.Message}", true);
                 _grid.ItemsSource = null;
                 _cachedFamilies = null;
                 _primaryGroups.Clear();
                 _total = 0;
+                ClearCategoryTree();
                 RefreshPagination();
             }
             catch (Exception ex)
@@ -573,6 +1022,7 @@ namespace FamilyMang
                 _cachedFamilies = null;
                 _primaryGroups.Clear();
                 _total = 0;
+                ClearCategoryTree();
                 RefreshPagination();
             }
             finally
@@ -583,7 +1033,7 @@ namespace FamilyMang
 
         private async void OnLoadClick(object sender, RoutedEventArgs e)
         {
-            if (!(_grid.SelectedItem is CatalogFamilyRow row) || !row.IsSelectable)
+            if (!(_grid.SelectedItem is CatalogFamilyRow row) || !row.IsHostRow)
                 return;
 
             var selected = row.Family;
@@ -632,22 +1082,77 @@ namespace FamilyMang
         {
             _connectBtn.IsEnabled = !busy;
             _loadBtn.IsEnabled = !busy &&
-                _grid.SelectedItem is CatalogFamilyRow r && r.IsSelectable;
+                _grid.SelectedItem is CatalogFamilyRow r && r.IsHostRow;
             _urlBox.IsEnabled = !busy;
             _companyBox.IsEnabled = !busy;
             if (_filterCombo != null)
                 _filterCombo.IsEnabled = !busy;
+            if (_searchBox != null)
+                _searchBox.IsEnabled = !busy;
+            if (_clearSearchBtn != null)
+                _clearSearchBtn.IsEnabled = !busy && !string.IsNullOrWhiteSpace(_searchBox?.Text);
+            if (_categoryTree != null)
+                _categoryTree.IsEnabled = !busy;
             Cursor = busy ? Cursors.Wait : null;
         }
 
         private bool ShowFavoritesOnly =>
             _filterCombo != null && _filterCombo.SelectedIndex == 1;
 
+        private static string FormatFilterHint(string filterKey)
+        {
+            if (string.IsNullOrWhiteSpace(filterKey) ||
+                string.Equals(filterKey, CatalogCategories.AllKey, StringComparison.OrdinalIgnoreCase))
+                return "";
+
+            if (filterKey.IndexOf("|mfr:", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var parts = filterKey.Split('|');
+                string cat = "", mfr = "";
+                foreach (var part in parts)
+                {
+                    if (part.StartsWith("cat:", StringComparison.OrdinalIgnoreCase))
+                        cat = part.Substring(4);
+                    else if (part.StartsWith("mfr:", StringComparison.OrdinalIgnoreCase))
+                        mfr = part.Substring(4);
+                }
+
+                return string.IsNullOrEmpty(mfr)
+                    ? " \u2022 " + cat
+                    : " \u2022 " + cat + " / " + mfr;
+            }
+
+            if (filterKey.StartsWith("cat:", StringComparison.OrdinalIgnoreCase))
+                return " \u2022 " + filterKey.Substring(4);
+
+            return " \u2022 " + filterKey;
+        }
+
+        private string CurrentSearchQuery =>
+            CatalogSearch.NormalizeQuery(_searchBox?.Text);
+
+        private List<List<CatalogFamilyRow>> GetGroupsForCategoryTree()
+        {
+            var groups = _primaryGroups;
+            if (ShowFavoritesOnly)
+                groups = FilterFavoritesOnly(groups);
+            return CatalogSearch.FilterGroups(groups, CurrentSearchQuery);
+        }
+
         private List<List<CatalogFamilyRow>> FilterGroups(List<List<CatalogFamilyRow>> groups)
         {
-            if (!ShowFavoritesOnly)
-                return groups;
+            var result = groups;
 
+            if (ShowFavoritesOnly)
+                result = FilterFavoritesOnly(result);
+
+            result = CatalogSearch.FilterGroups(result, CurrentSearchQuery);
+            result = CatalogCategories.FilterByCategory(result, _selectedCategoryKey);
+            return result;
+        }
+
+        private List<List<CatalogFamilyRow>> FilterFavoritesOnly(List<List<CatalogFamilyRow>> groups)
+        {
             return groups
                 .Where(g => g.Count > 0 &&
                             g[0].Family != null &&
@@ -655,20 +1160,99 @@ namespace FamilyMang
                 .ToList();
         }
 
-        private IEnumerable<CatalogFamilyRow> ToRowsWithFavorites(List<CatalogFamilyRow> group)
+        private string BuildCatalogAccessHint(JwtAuthService auth, List<FamilySummaryDto> families)
         {
+            var parts = new List<string>();
+            var configuredCompany = auth?.CompanyId?.Trim();
+            if (!string.IsNullOrEmpty(configuredCompany))
+                parts.Add("Company ID: " + configuredCompany);
+
+            if (!string.IsNullOrEmpty(auth?.WindowsUser))
+                parts.Add("Windows: " + auth.WindowsUser);
+
+            parts.Add("\u043e\u0431\u0449\u0438\u0439 \u043a\u0430\u0442\u0430\u043b\u043e\u0433");
+
+            var projectIds = (families ?? new List<FamilySummaryDto>())
+                .Select(f => f?.project_id)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (projectIds.Count == 1)
+                parts.Add("project_id: " + ShortId(projectIds[0]));
+            else if (projectIds.Count > 1)
+                parts.Add("\u26a0 \u0440\u0430\u0437\u043d\u044b\u0435 project_id \u0432 \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435");
+
+            if ((families == null || families.Count == 0) && _total == 0 &&
+                string.IsNullOrEmpty(CurrentSearchQuery) && !ShowFavoritesOnly)
+            {
+                parts.Add(
+                    "\u041f\u0443\u0441\u0442\u043e: \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 (" + configuredCompany + ", " +
+                    Environment.UserName + ") \u0432 company_users \u0438\u043b\u0438 \u0436\u0434\u0438\u0442\u0435 backend rev 7");
+            }
+
+            return parts.Count == 0 ? "" : " \u2022 " + string.Join(" \u2022 ", parts);
+        }
+
+        private static string ShortId(string id)
+        {
+            if (string.IsNullOrEmpty(id) || id.Length <= 12)
+                return id ?? "";
+            return id.Substring(0, 8) + "\u2026";
+        }
+
+        private string FormatActiveFiltersHint()
+        {
+            var parts = new List<string>();
+            var category = FormatFilterHint(_selectedCategoryKey);
+            if (!string.IsNullOrEmpty(category))
+                parts.Add(category.Trim().TrimStart('\u2022').Trim());
+
+            var search = CurrentSearchQuery;
+            if (!string.IsNullOrEmpty(search))
+                parts.Add("\u043f\u043e\u0438\u0441\u043a: \u00ab" + search + "\u00bb");
+
+            if (ShowFavoritesOnly)
+                parts.Add("\u0438\u0437\u0431\u0440\u0430\u043d\u043d\u044b\u0435");
+
+            return parts.Count == 0 ? "" : " \u2022 " + string.Join(" \u2022 ", parts);
+        }
+
+        private void ApplySearchExpansionHints(IEnumerable<List<CatalogFamilyRow>> groups)
+        {
+            var query = CurrentSearchQuery;
+            if (string.IsNullOrEmpty(query))
+                return;
+
+            foreach (var group in groups ?? Enumerable.Empty<List<CatalogFamilyRow>>())
+            {
+                if (!CatalogSearch.ShouldAutoExpandGroup(group, query))
+                    continue;
+
+                var host = group.FirstOrDefault(r => !r.IsNested);
+                if (host?.Family?.id != null)
+                    _expandedHostIds.Add(host.Family.id);
+            }
+        }
+
+        private List<CatalogFamilyRow> ToRowsWithFavorites(List<CatalogFamilyRow> group)
+        {
+            if (group == null)
+                return new List<CatalogFamilyRow>();
+
             foreach (var row in group)
             {
                 if (row.Family != null && !row.IsNested)
                     row.IsFavorite = _favoriteIds.Contains(row.Family.id);
-                yield return row;
             }
+
+            return group;
         }
 
-        private static IEnumerable<CatalogFamilyRow> ApplyBundleVersion(List<CatalogFamilyRow> group)
+        private static List<CatalogFamilyRow> ApplyBundleVersion(List<CatalogFamilyRow> group)
         {
             if (group == null || group.Count == 0)
-                return group;
+                return group ?? new List<CatalogFamilyRow>();
 
             var maxVer = group
                 .Where(r => r.Family != null)

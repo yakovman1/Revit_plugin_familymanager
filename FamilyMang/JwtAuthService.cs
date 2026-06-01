@@ -20,6 +20,7 @@ namespace FamilyMang
         private DateTime _tokenExpiry = DateTime.MinValue;
 
         public string WindowsUser => _windowsUser;
+        public string CompanyId => _companyId;
 
         public JwtAuthService(string baseUrl, string companyId, int timeoutSeconds = 120)
         {
