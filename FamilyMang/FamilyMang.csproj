@@ -47,11 +47,11 @@
     <Reference Include="System.Xaml" />
     <Reference Include="RevitAPI">
       <HintPath>D:\Program files\Revit.2022\Revit 2022\RevitAPI.dll</HintPath>
-      <Private>True</Private>
+      <Private>False</Private>
     </Reference>
     <Reference Include="RevitAPIUI">
       <HintPath>D:\Program files\Revit.2022\Revit 2022\RevitAPIUI.dll</HintPath>
-      <Private>True</Private>
+      <Private>False</Private>
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -61,6 +61,7 @@
     <Compile Include="CatalogCommand.cs" />
     <Compile Include="CatalogCategories.cs" />
     <Compile Include="CatalogSearch.cs" />
+    <Compile Include="BrandingHeader.cs" />
     <Compile Include="CatalogWindow.cs" />
     <Compile Include="Command.cs" />
     <Compile Include="FamilyExtractor.cs" />
@@ -73,6 +74,11 @@
     <Compile Include="UploadCommand.cs" />
     <Compile Include="UploadWindow.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\AtpTlpLogo.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

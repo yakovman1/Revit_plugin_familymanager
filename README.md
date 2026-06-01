@@ -90,13 +90,35 @@ Build → Build Solution (Ctrl+Shift+B)
 
 ## Установка в Revit
 
-### Вариант A: Ручная установка
+> **Важно:** DLL лежит в `bin\Debug\FamilyMang.dll`, **не** в `obj\Debug\Assets\`.  
+> В `.addin` в теге `<Assembly>` нужен **полный путь** к DLL (не пусто и не только имя файла).
+
+### Вариант A (рекомендуется): скрипт
+
+Из папки `Revit_plugin_familymanager` в PowerShell:
+
+```powershell
+.\Install-RevitAddin.ps1
+```
+
+Скрипт копирует `FamilyMang.dll`, `Assets\AtpTlpLogo.png` и создаёт `FamilyMang.addin` в  
+`%AppData%\Autodesk\Revit\Addins\2022\` с корректным полным путём. Перезапустите Revit.
+
+### Вариант B: Ручная установка
 
 1. Скопируйте файл `FamilyMang.dll` (из `bin\Debug\`) в удобную папку, например:
 
    ```
    C:\RevitPlugins\FamilyMang\FamilyMang.dll
    ```
+
+   Рядом с DLL создайте папку `Assets` и скопируйте логотип (для шапки окон):
+
+   ```
+   C:\RevitPlugins\FamilyMang\Assets\AtpTlpLogo.png
+   ```
+
+   (из `FamilyMang\Assets\` в проекте или из `bin\Debug\Assets\` после сборки)
 
 2. Скопируйте файл `FamilyMang.addin` в папку Addins Revit:
 
@@ -109,11 +131,13 @@ Build → Build Solution (Ctrl+Shift+B)
    C:\Users\<ИМЯ_ПОЛЬЗОВАТЕЛЯ>\AppData\Roaming\Autodesk\Revit\Addins\2022\
    ```
 
-3. Откройте `FamilyMang.addin` текстовым редактором и укажите полный путь к DLL:
+3. Скопируйте `FamilyMang.addin` в `%AppData%\Autodesk\Revit\Addins\2022\` и укажите **полный** путь к DLL:
 
    ```xml
    <Assembly>C:\RevitPlugins\FamilyMang\FamilyMang.dll</Assembly>
    ```
+
+   Если `<Assembly>FamilyMang.dll</Assembly>` без пути — Revit часто **не загружает** плагин (в менеджере add-in путь пустой).
 
 ### Вариант B: Автоматическая установка через Post-Build
 

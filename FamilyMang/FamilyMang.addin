@@ -2,7 +2,8 @@
 <RevitAddIns>
   <AddIn Type="Application">
     <Name>FamilyMang</Name>
-    <Assembly>FamilyMang.dll</Assembly>
+    <!-- Полный путь к DLL. Запустите Install-RevitAddin.ps1 — подставит путь автоматически. -->
+    <Assembly>P:\MOS-TLP\GROUPS\ALLGEMEIN\06_HKLS\PDE\Жизнь BIM\Family\Revit_plugin_familymanager\FamilyMang\bin\Debug\FamilyMang.dll</Assembly>
     <FullClassName>FamilyMang.App</FullClassName>
     <AddInId>03CB6832-D933-44CD-AD29-3933D5A934CE</AddInId>
     <VendorId>FamilyMang</VendorId>

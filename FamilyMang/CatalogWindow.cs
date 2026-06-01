@@ -81,6 +81,10 @@ namespace FamilyMang
         {
             var root = new DockPanel();
 
+            var header = BrandingHeader.Create("FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432");
+            DockPanel.SetDock(header, Dock.Top);
+            root.Children.Add(header);
+
             var connBar = BuildConnectionBar();
             DockPanel.SetDock(connBar, Dock.Top);
             root.Children.Add(connBar);

@@ -160,3 +160,4 @@ P:\MOS-TLP\GROUPS\ALLGEMEIN\06_HKLS\PDE\Жизнь BIM\Family\Revit_plugin_famil
 P:\MOS-TLP\GROUPS\ALLGEMEIN\06_HKLS\PDE\Жизнь BIM\Family\Revit_plugin_familymanager\FamilyMang\obj\Debug\FamilyMang.csproj.Up2Date
 P:\MOS-TLP\GROUPS\ALLGEMEIN\06_HKLS\PDE\Жизнь BIM\Family\Revit_plugin_familymanager\FamilyMang\obj\Debug\FamilyMang.dll
 P:\MOS-TLP\GROUPS\ALLGEMEIN\06_HKLS\PDE\Жизнь BIM\Family\Revit_plugin_familymanager\FamilyMang\obj\Debug\FamilyMang.pdb
+P:\MOS-TLP\GROUPS\ALLGEMEIN\06_HKLS\PDE\Жизнь BIM\Family\Revit_plugin_familymanager\FamilyMang\bin\Debug\Assets\AtpTlpLogo.png
