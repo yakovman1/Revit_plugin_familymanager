@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -12,6 +11,9 @@ namespace FamilyMang
         public int Count { get; set; }
         public string CategoryName { get; set; }
         public string ManufacturerName { get; set; }
+        public bool IsAnnotationSection { get; set; }
+        public bool IsFamilySection { get; set; }
+        public bool IsAnnotationCategory { get; set; }
         public List<CategoryFolderItem> Children { get; set; } = new List<CategoryFolderItem>();
 
         public bool IsAll => Key == CatalogCategories.AllKey;
@@ -28,6 +30,7 @@ namespace FamilyMang
         private const string UncategorizedLabel = "\u0411\u0435\u0437 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438";
         private const string CategoryPrefix = "cat:";
         private const string ManufacturerPrefix = "mfr:";
+        private const string AnnotationCategoryPrefix = "ann:";
 
         public static string NormalizeCategory(string category)
         {
@@ -52,6 +55,14 @@ namespace FamilyMang
             return NormalizeCategory(host?.Family?.Category);
         }
 
+        public static bool IsAnnotationGroup(IReadOnlyList<CatalogFamilyRow> group)
+        {
+            if (group == null || group.Count == 0)
+                return false;
+            var host = group.FirstOrDefault(r => !r.IsNested) ?? group[0];
+            return CatalogFamilyClassification.IsAnnotationFamily(host?.Family);
+        }
+
         public static string GetHostManufacturerKey(IReadOnlyList<CatalogFamilyRow> group)
         {
             if (group == null || group.Count == 0)
@@ -69,6 +80,9 @@ namespace FamilyMang
             return CategoryPrefix + cat + "|" + ManufacturerPrefix + mfr;
         }
 
+        private static string MakeAnnotationCategoryKey(string category) =>
+            AnnotationCategoryPrefix + NormalizeCategory(category);
+
         public static List<CategoryFolderItem> BuildFolderTree(IEnumerable<List<CatalogFamilyRow>> groups)
         {
             var source = groups?.Where(g => g != null && g.Count > 0).ToList()
@@ -84,11 +98,60 @@ namespace FamilyMang
                 }
             };
 
-            var byCategory = source
-                .GroupBy(GetHostCategoryKey, StringComparer.OrdinalIgnoreCase)
-                .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase);
+            var annotationGroups = source.Where(IsAnnotationGroup).ToList();
+            var modelGroups = source.Where(g => !IsAnnotationGroup(g)).ToList();
 
-            foreach (var categoryGroup in byCategory)
+            if (annotationGroups.Count > 0)
+            {
+                var annotationNode = new CategoryFolderItem
+                {
+                    Key = CatalogFamilyClassification.AnnotationSectionKey,
+                    DisplayName = CatalogFamilyClassification.AnnotationSectionLabel,
+                    IsAnnotationSection = true,
+                    Count = annotationGroups.Count
+                };
+
+                foreach (var categoryGroup in annotationGroups
+                             .GroupBy(GetHostCategoryKey, StringComparer.OrdinalIgnoreCase)
+                             .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase))
+                {
+                    annotationNode.Children.Add(new CategoryFolderItem
+                    {
+                        Key = MakeAnnotationCategoryKey(categoryGroup.Key),
+                        DisplayName = categoryGroup.Key,
+                        CategoryName = categoryGroup.Key,
+                        IsAnnotationCategory = true,
+                        Count = categoryGroup.Count()
+                    });
+                }
+
+                tree.Add(annotationNode);
+            }
+
+            if (modelGroups.Count > 0)
+            {
+                var familyNode = new CategoryFolderItem
+                {
+                    Key = CatalogFamilyClassification.FamilySectionKey,
+                    DisplayName = CatalogFamilyClassification.FamilySectionLabel,
+                    IsFamilySection = true,
+                    Count = modelGroups.Count
+                };
+
+                AppendModelCategoryChildren(familyNode, modelGroups);
+                tree.Add(familyNode);
+            }
+
+            return tree;
+        }
+
+        private static void AppendModelCategoryChildren(
+            CategoryFolderItem familyNode,
+            List<List<CatalogFamilyRow>> modelGroups)
+        {
+            foreach (var categoryGroup in modelGroups
+                         .GroupBy(GetHostCategoryKey, StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase))
             {
                 var categoryName = categoryGroup.Key;
                 var categoryNode = new CategoryFolderItem
@@ -117,10 +180,8 @@ namespace FamilyMang
                     });
                 }
 
-                tree.Add(categoryNode);
+                familyNode.Children.Add(categoryNode);
             }
-
-            return tree;
         }
 
         public static List<List<CatalogFamilyRow>> FilterByCategory(
@@ -132,10 +193,29 @@ namespace FamilyMang
                 string.Equals(filterKey, AllKey, StringComparison.OrdinalIgnoreCase))
                 return list;
 
+            if (string.Equals(filterKey, CatalogFamilyClassification.AnnotationSectionKey,
+                    StringComparison.OrdinalIgnoreCase))
+                return list.Where(IsAnnotationGroup).ToList();
+
+            if (string.Equals(filterKey, CatalogFamilyClassification.FamilySectionKey,
+                    StringComparison.OrdinalIgnoreCase))
+                return list.Where(g => !IsAnnotationGroup(g)).ToList();
+
+            if (filterKey.StartsWith(AnnotationCategoryPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var annCategory = filterKey.Substring(AnnotationCategoryPrefix.Length);
+                return list.Where(g =>
+                    IsAnnotationGroup(g) &&
+                    string.Equals(GetHostCategoryKey(g), annCategory, StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+
             ParseFilterKey(filterKey, out var category, out var manufacturer);
 
             return list.Where(g =>
             {
+                if (IsAnnotationGroup(g))
+                    return false;
+
                 if (!string.Equals(GetHostCategoryKey(g), category, StringComparison.OrdinalIgnoreCase))
                     return false;
 

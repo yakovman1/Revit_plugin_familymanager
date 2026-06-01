@@ -60,6 +60,7 @@
     <Compile Include="App.cs" />
     <Compile Include="CatalogCommand.cs" />
     <Compile Include="CatalogCategories.cs" />
+    <Compile Include="CatalogFamilyClassification.cs" />
     <Compile Include="CatalogSearch.cs" />
     <Compile Include="BrandingHeader.cs" />
     <Compile Include="CatalogWindow.cs" />

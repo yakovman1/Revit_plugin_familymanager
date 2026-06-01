@@ -69,6 +69,7 @@ namespace FamilyMang
         public long SizeBytes { get; set; }
         public string Sha256 { get; set; }
         public bool IsPrimary { get; set; }
+        public bool IsAnnotation { get; set; }
         public List<Dictionary<string, object>> Parameters { get; set; }
         public List<Dictionary<string, object>> Types { get; set; }
     }
