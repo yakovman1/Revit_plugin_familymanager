@@ -14,7 +14,7 @@ namespace FamilyMang
             InitUploadResponseDto initResponse)
         {
             if (string.IsNullOrWhiteSpace(thumbnailPath) || !File.Exists(thumbnailPath))
-                return "Превью: не удалось снять снимок в Revit";
+                return null;
 
             try
             {

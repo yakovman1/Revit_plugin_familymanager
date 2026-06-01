@@ -77,10 +77,18 @@ namespace FamilyMang
                     return Result.Failed;
                 }
 
-                string hostThumbnailPath = FamilyThumbnailExporter.TryExport(doc);
+                var uiDoc = commandData.Application.ActiveUIDocument;
+                var thumbExport = FamilyThumbnailExporter.TryExportDetailed(doc, uiDoc);
+                string hostThumbnailPath = thumbExport.FilePath;
+                string thumbnailExportNote = thumbExport.Success
+                    ? null
+                    : "Превью: не удалось снять снимок в Revit" +
+                      (string.IsNullOrWhiteSpace(thumbExport.ErrorDetail)
+                          ? ""
+                          : " (" + thumbExport.ErrorDetail + ")");
 
                 string resultMessage = Task.Run(() =>
-                    UploadExtractedBundleAsync(settings, extracted, hostThumbnailPath))
+                    UploadExtractedBundleAsync(settings, extracted, hostThumbnailPath, thumbnailExportNote))
                     .GetAwaiter().GetResult();
 
                 TaskDialog.Show("FamilyMang", resultMessage);
@@ -95,7 +103,10 @@ namespace FamilyMang
         }
 
         private static async Task<string> UploadExtractedBundleAsync(
-            PluginSettings settings, ExtractedUploadBundle extracted, string hostThumbnailPath)
+            PluginSettings settings,
+            ExtractedUploadBundle extracted,
+            string hostThumbnailPath,
+            string thumbnailExportNote = null)
         {
             using (var auth = new JwtAuthService(settings.ServerUrl, settings.CompanyId))
             using (var client = new ApiClient(auth))
@@ -147,7 +158,9 @@ namespace FamilyMang
                     $"Вложенных: {nestedOk} из {extracted.Nested.Count}"
                 };
 
-                if (!string.IsNullOrWhiteSpace(primaryResult.ThumbnailNote))
+                if (!string.IsNullOrWhiteSpace(thumbnailExportNote))
+                    lines.Add(thumbnailExportNote);
+                else if (!string.IsNullOrWhiteSpace(primaryResult.ThumbnailNote))
                     lines.Add(primaryResult.ThumbnailNote);
 
                 if (nestedVersionLines.Count > 0)
