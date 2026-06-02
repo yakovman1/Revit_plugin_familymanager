@@ -33,6 +33,28 @@ namespace FamilyMang
             _externalEvent.Raise();
         }
 
+        public static void ActivateAndPlace(UIApplication app, Document doc, FamilySymbol symbol)
+        {
+            if (app == null || doc == null || symbol == null || !symbol.IsValidObject)
+                return;
+
+            if (doc.IsFamilyDocument || doc.IsReadOnly)
+                return;
+
+            if (!symbol.IsActive)
+            {
+                using (var tx = new Transaction(doc, "FamilyMang: активация типа"))
+                {
+                    tx.Start();
+                    symbol.Activate();
+                    tx.Commit();
+                }
+            }
+
+            var uidoc = new UIDocument(doc);
+            uidoc.PostRequestForElementTypePlacement(symbol);
+        }
+
         public void Execute(UIApplication app)
         {
             var symbolId = _symbolId;
@@ -51,18 +73,7 @@ namespace FamilyMang
                 if (symbol == null || !symbol.IsValidObject)
                     return;
 
-                if (!symbol.IsActive)
-                {
-                    using (var tx = new Transaction(doc, "FamilyMang: активация типа"))
-                    {
-                        tx.Start();
-                        symbol.Activate();
-                        tx.Commit();
-                    }
-                }
-
-                var uidoc = new UIDocument(doc);
-                uidoc.PostRequestForElementTypePlacement(symbol);
+                ActivateAndPlace(app, doc, symbol);
             }
             catch
             {

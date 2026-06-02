@@ -31,6 +31,10 @@ namespace FamilyMang
                         "FamilyMang.Command")) as PushButton;
                 aboutBtn.ToolTip = "Информация о плагине FamilyMang";
 
+                FamilyLoadHandler.Initialize();
+                FamilyPlacementHandler.Initialize();
+                UploadWorkflowHandler.Initialize();
+
                 return Result.Succeeded;
             }
             catch (Exception)

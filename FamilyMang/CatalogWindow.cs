@@ -862,7 +862,7 @@ namespace FamilyMang
         private void SaveAndClose(bool result)
         {
             PersistSettings();
-            DialogResult = result;
+            Close();
         }
 
         private async void OnConnectClick(object sender, RoutedEventArgs e)
@@ -1019,6 +1019,15 @@ namespace FamilyMang
             }
         }
 
+        private async Task ReloadCatalogFromServerAsync(string statusMessage = null)
+        {
+            if (!string.IsNullOrWhiteSpace(statusMessage))
+                Status(statusMessage, false);
+
+            _cachedFamilies = null;
+            await LoadPageAsync();
+        }
+
         private async void OnLoadClick(object sender, RoutedEventArgs e)
         {
             if (!(_grid.SelectedItem is CatalogFamilyRow row) || !row.IsHostRow)
@@ -1037,10 +1046,24 @@ namespace FamilyMang
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
-                    DownloadedFilePath = await FamilyLoader.DownloadAsync(
-                        client, selected.id, selected.original_filename);
+                    var rfaPath = await FamilyLoader.DownloadAsync(
+                        client, selected.id, selected.original_filename).ConfigureAwait(true);
+
+                    FamilyLoadHandler.Schedule(rfaPath, (ok, msg) =>
+                    {
+                        Dispatcher.BeginInvoke(new Action(async () =>
+                        {
+                            if (!ok)
+                            {
+                                Status(msg, true);
+                                Busy(false);
+                                return;
+                            }
+
+                            await ReloadCatalogFromServerAsync(msg + " Обновление списка…");
+                        }));
+                    });
                 }
-                SaveAndClose(true);
             }
             catch (Exception ex)
             {

@@ -214,7 +214,7 @@ namespace FamilyMang
             var panel = new DockPanel { Margin = new Thickness(12, 6, 12, 8) };
 
             var closeBtn = Btn("\u0417\u0430\u043a\u0440\u044b\u0442\u044c", false);
-            closeBtn.Click += (s, e) => { PersistSettings(); DialogResult = false; };
+            closeBtn.Click += (s, e) => { PersistSettings(); Close(); };
             DockPanel.SetDock(closeBtn, Dock.Right);
             panel.Children.Add(closeBtn);
 
@@ -321,9 +321,16 @@ namespace FamilyMang
             if (_bundle.Items.Count == 0)
                 return;
 
-            ConfirmedUpload = true;
             PersistSettings();
-            DialogResult = true;
+            _settings.ServerUrl = _urlBox.Text.Trim();
+            _settings.Save();
+
+            ConfirmedUpload = true;
+            _uploadBtn.IsEnabled = false;
+            _statusText.Text = "\u0412\u044b\u0433\u0440\u0443\u0437\u043a\u0430 \u0432 \u0445\u0440\u0430\u043d\u0438\u043b\u0438\u0449\u0435\u2026";
+            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120));
+
+            UploadWorkflowHandler.Schedule(_bundle, PluginSettings.Load());
         }
 
         #endregion

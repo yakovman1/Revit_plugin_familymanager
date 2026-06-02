@@ -69,6 +69,10 @@
     <Compile Include="FamilyThumbnailExporter.cs" />
     <Compile Include="FamilyThumbnailUpload.cs" />
     <Compile Include="FamilyLoader.cs" />
+    <Compile Include="FamilyLoadHandler.cs" />
+    <Compile Include="FamilyPlacementHandler.cs" />
+    <Compile Include="PluginWindows.cs" />
+    <Compile Include="UploadWorkflowHandler.cs" />
     <Compile Include="ThumbnailCache.cs" />
     <Compile Include="Models.cs" />
     <Compile Include="Settings.cs" />

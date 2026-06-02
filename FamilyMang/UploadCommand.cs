@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -55,44 +54,7 @@ namespace FamilyMang
                     return Result.Cancelled;
                 }
 
-                var window = new UploadWindow(bundle);
-                IntPtr hwnd = Process.GetCurrentProcess().MainWindowHandle;
-                if (hwnd != IntPtr.Zero)
-                    new System.Windows.Interop.WindowInteropHelper(window).Owner = hwnd;
-
-                if (window.ShowDialog() != true)
-                    return Result.Succeeded;
-
-                var settings = PluginSettings.Load();
-                var uiDoc = commandData.Application.ActiveUIDocument;
-
-                // Снимок до ExtractBundle/SaveAs — иначе ExportImage в редакторе марки часто не пишет файл
-                var thumbExport = FamilyThumbnailExporter.TryExportDetailed(doc, uiDoc);
-
-                ExtractedUploadBundle extracted;
-                try
-                {
-                    extracted = FamilyExtractor.ExtractBundle(doc, bundle);
-                }
-                catch (Exception ex)
-                {
-                    TaskDialog.Show("FamilyMang — Ошибка",
-                        $"Не удалось подготовить файлы семейств:\n{ex.Message}");
-                    return Result.Failed;
-                }
-                string hostThumbnailPath = thumbExport.FilePath;
-                string thumbnailExportNote = thumbExport.Success
-                    ? null
-                    : "Превью: не удалось снять снимок в Revit" +
-                      (string.IsNullOrWhiteSpace(thumbExport.ErrorDetail)
-                          ? ""
-                          : " (" + thumbExport.ErrorDetail + ")");
-
-                string resultMessage = Task.Run(() =>
-                    UploadExtractedBundleAsync(settings, extracted, hostThumbnailPath, thumbnailExportNote))
-                    .GetAwaiter().GetResult();
-
-                TaskDialog.Show("FamilyMang", resultMessage);
+                PluginWindows.ShowUpload(bundle);
                 return Result.Succeeded;
             }
             catch (Exception ex)
@@ -103,7 +65,7 @@ namespace FamilyMang
             }
         }
 
-        private static async Task<string> UploadExtractedBundleAsync(
+        internal static async Task<string> UploadExtractedBundleAsync(
             PluginSettings settings,
             ExtractedUploadBundle extracted,
             string hostThumbnailPath,
