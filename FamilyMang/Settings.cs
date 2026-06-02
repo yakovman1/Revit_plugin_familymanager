@@ -7,7 +7,6 @@ namespace FamilyMang
     public class PluginSettings
     {
         public string ServerUrl { get; set; } = "http://localhost:8000";
-        public string CompanyId { get; set; } = "";
 
         private static readonly string SettingsDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FamilyMang");

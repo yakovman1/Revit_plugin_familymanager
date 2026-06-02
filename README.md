@@ -9,7 +9,7 @@
 
 - Вкладка **FamilyMang** на ленте Revit с панелью **Инструменты**
 - Кнопка **Каталог** — просмотр семейств из бэкенда
-  - Подключение к серверу по URL и **Company ID**
+  - Подключение к серверу по URL
   - Windows-пользователь подставляется автоматически
   - Таблица семейств: имя, категория, файл, статус, размер
   - Пагинация (по 20 записей)
@@ -21,7 +21,7 @@
   - Полный 4-шаговый upload flow: `init-upload` → S3 PUT → `metadata` → `complete`
 - Кнопка **О плагине** — информационный диалог
 - Настройки подключения сохраняются между сессиями (`%AppData%\FamilyMang\settings.json`)
-- Аутентификация через **Company ID** + Windows-логин → `POST /api/v1/auth` (JWT автоматически, без ручного токена)
+- Аутентификация через Windows-логин → `POST /api/v1/family/auth` (JWT автоматически, без ручного токена)
 
 ## Требования
 
@@ -45,7 +45,7 @@ FamilyMang/
     ├── CatalogCommand.cs         # IExternalCommand — команда кнопки «Каталог»
     ├── CatalogWindow.cs          # WPF-окно каталога (code-only, без XAML)
     ├── ApiClient.cs              # HTTP-клиент к бэкенду (Bearer JWT)
-    ├── JwtAuthService.cs         # POST /api/v1/auth, кеш токена
+    ├── JwtAuthService.cs         # POST /api/v1/family/auth, кеш токена
     ├── Models.cs                 # DTO-классы для ответов API
     ├── Settings.cs               # Сохранение/загрузка настроек подключения
     ├── FamilyLoader.cs           # Скачивание .rfa и загрузка в документ Revit
@@ -164,7 +164,7 @@ copy "$(ProjectDir)FamilyMang.addin" "%AppData%\Autodesk\Revit\Addins\2022\Famil
 
    Сервер будет доступен по адресу `http://localhost:8000`.
 
-2. **Убедитесь, что компания зарегистрирована** в backend (`atptlp_info.companies`) и при необходимости пользователь в whitelist (`company_users`).
+2. **Убедитесь, что Windows-пользователь добавлен** в user-only whitelist FamilyMang на backend.
 
 3. **Запустите Revit 2022**.
 
@@ -174,7 +174,6 @@ copy "$(ProjectDir)FamilyMang.addin" "%AppData%\Autodesk\Revit\Addins\2022\Famil
 
 6. В открывшемся окне:
    - **Сервер**: `http://localhost:8000` (или адрес вашего сервера)
-   - **Company ID**: код компании от администратора
    - Нажмите **Загрузить список**
 
 7. Выберите семейство из таблицы и нажмите **Загрузить в проект**.
@@ -188,7 +187,7 @@ copy "$(ProjectDir)FamilyMang.addin" "%AppData%\Autodesk\Revit\Addins\2022\Famil
 2. На вкладке **FamilyMang** нажмите кнопку **Загрузка семейства**.
 
 3. В открывшемся окне:
-   - Заполните **Сервер** и **Company ID** (сохраняются автоматически)
+   - Заполните **Сервер** (сохраняется автоматически)
    - Выберите семейство из списка
    - Нажмите **Загрузить в хранилище**
 
@@ -273,8 +272,7 @@ Revit UI                          Backend (FastAPI)              S3 / MinIO
 Формат:
 ```json
 {
-  "ServerUrl": "http://localhost:8000",
-  "CompanyId": "MY_COMPANY"
+  "ServerUrl": "http://localhost:8000"
 }
 ```
 
@@ -285,6 +283,6 @@ Revit UI                          Backend (FastAPI)              S3 / MinIO
 | Вкладка не появляется в Revit | Проверьте, что `.addin` файл лежит в `%AppData%\Autodesk\Revit\Addins\2022\` и путь к DLL в нём корректен |
 | Ошибка «Could not load file or assembly» | Проверьте, что DLL собрана под **x64** и **.NET Framework 4.8** |
 | Ошибка подключения к серверу | Убедитесь, что бэкенд запущен и доступен по указанному URL |
-| 401 Unauthorized | Проверьте Company ID и что пользователь Windows в whitelist компании |
-| 403 Forbidden | Windows-пользователь не разрешён для этой компании |
+| 401 Unauthorized | Проверьте, что backend поддерживает `POST /api/v1/family/auth` |
+| 403 Forbidden | Windows-пользователь не добавлен в user-only whitelist FamilyMang |
 | Семейство не загружается в проект | Убедитесь, что в Revit открыт документ (не стартовая страница). Файл должен быть `.rfa` |

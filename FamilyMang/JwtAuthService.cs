@@ -11,7 +11,6 @@ namespace FamilyMang
     public sealed class JwtAuthService : IDisposable
     {
         private readonly HttpClient _http;
-        private readonly string _companyId;
         private readonly string _windowsUser;
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
         private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
@@ -20,11 +19,9 @@ namespace FamilyMang
         private DateTime _tokenExpiry = DateTime.MinValue;
 
         public string WindowsUser => _windowsUser;
-        public string CompanyId => _companyId;
 
-        public JwtAuthService(string baseUrl, string companyId, int timeoutSeconds = 120)
+        public JwtAuthService(string baseUrl, int timeoutSeconds = 120)
         {
-            _companyId = companyId ?? string.Empty;
             _windowsUser = Environment.UserName;
 
             _http = new HttpClient
@@ -47,12 +44,11 @@ namespace FamilyMang
 
                 var body = _json.Serialize(new Dictionary<string, object>
                 {
-                    { "companyId", _companyId },
                     { "windowsUser", _windowsUser }
                 });
 
                 using (var content = new StringContent(body, Encoding.UTF8, "application/json"))
-                using (var response = await _http.PostAsync("api/v1/auth", content).ConfigureAwait(false))
+                using (var response = await _http.PostAsync("api/v1/family/auth", content).ConfigureAwait(false))
                 {
                     var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode)

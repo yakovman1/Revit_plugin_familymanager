@@ -20,7 +20,6 @@ namespace FamilyMang
         private readonly PluginSettings _settings;
 
         private TextBox _urlBox;
-        private TextBox _companyBox;
         private TextBlock _userLabel;
         private DataGrid _grid;
         private Button _connectBtn;
@@ -405,24 +404,14 @@ namespace FamilyMang
             Put(grid, Label("\u0421\u0435\u0440\u0432\u0435\u0440:"), 0, 0);
             _urlBox = CreateTextBox(); Put(grid, _urlBox, 0, 1);
 
-            var companyLabel = Label("Company ID:", 12);
-            companyLabel.ToolTip =
-                "\u0414\u043b\u044f \u0432\u0445\u043e\u0434\u0430 \u0438 \u0430\u0443\u0434\u0438\u0442\u0430 (\u043a\u0442\u043e \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u043b).\n" +
-                "\u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432 \u043e\u0431\u0449\u0438\u0439 \u2014 Company ID \u043d\u0435 \u0440\u0430\u0437\u0434\u0435\u043b\u044f\u0435\u0442 \u0431\u0430\u0437\u0443.\n" +
-                "\u041d\u0443\u0436\u043d\u0430 \u0437\u0430\u043f\u0438\u0441\u044c \u0432 atptlp_info.company_users \u0434\u043b\u044f \u0432\u0430\u0448\u0435\u0433\u043e Windows-\u043b\u043e\u0433\u0438\u043d\u0430.";
-            Put(grid, companyLabel, 0, 2);
-            _companyBox = CreateTextBox();
-            _companyBox.ToolTip = companyLabel.ToolTip;
-            Put(grid, _companyBox, 0, 3);
-
-            Put(grid, Label("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:"), 2, 0);
+            Put(grid, Label("\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c:", 12), 0, 2);
             _userLabel = new TextBlock
             {
                 Text = Environment.UserName,
                 VerticalAlignment = VerticalAlignment.Center,
                 Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80))
             };
-            Put(grid, _userLabel, 2, 1);
+            Put(grid, _userLabel, 0, 3);
 
             Put(grid, Label("\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c:", 12), 2, 2);
             _filterCombo = new ComboBox
@@ -858,13 +847,11 @@ namespace FamilyMang
         private void RestoreSettings()
         {
             _urlBox.Text = _settings.ServerUrl;
-            _companyBox.Text = _settings.CompanyId;
         }
 
         private void PersistSettings()
         {
             _settings.ServerUrl = _urlBox.Text.Trim();
-            _settings.CompanyId = _companyBox.Text.Trim();
             _settings.Save();
         }
 
@@ -953,19 +940,12 @@ namespace FamilyMang
 
         private async Task LoadPageAsync()
         {
-            var companyId = _companyBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(companyId))
-            {
-                Status("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 Company ID", true);
-                return;
-            }
-
             Busy(true);
             Status("\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430\u2026", false);
 
             try
             {
-                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), companyId))
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim()))
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
@@ -1010,7 +990,7 @@ namespace FamilyMang
             {
                 Status(ex.StatusCode == 403
                     ? "\u0414\u043e\u0441\u0442\u0443\u043f \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d: \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 " + Environment.UserName +
-                      " \u0432 atptlp_info.company_users \u0434\u043b\u044f Company ID \"" + _companyBox.Text.Trim() + "\""
+                      " \u0432 whitelist FamilyMang"
                     : $"\u041e\u0448\u0438\u0431\u043a\u0430 \u0430\u0443\u0442\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u0438: {ex.Message}", true);
                 _grid.ItemsSource = null;
                 _cachedFamilies = null;
@@ -1049,7 +1029,7 @@ namespace FamilyMang
 
             try
             {
-                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), _companyBox.Text.Trim()))
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim()))
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
@@ -1088,7 +1068,6 @@ namespace FamilyMang
             _loadBtn.IsEnabled = !busy &&
                 _grid.SelectedItem is CatalogFamilyRow r && r.IsHostRow;
             _urlBox.IsEnabled = !busy;
-            _companyBox.IsEnabled = !busy;
             if (_filterCombo != null)
                 _filterCombo.IsEnabled = !busy;
             if (_searchBox != null)
@@ -1167,10 +1146,6 @@ namespace FamilyMang
         private string BuildCatalogAccessHint(JwtAuthService auth, List<FamilySummaryDto> families)
         {
             var parts = new List<string>();
-            var configuredCompany = auth?.CompanyId?.Trim();
-            if (!string.IsNullOrEmpty(configuredCompany))
-                parts.Add("Company ID: " + configuredCompany);
-
             if (!string.IsNullOrEmpty(auth?.WindowsUser))
                 parts.Add("Windows: " + auth.WindowsUser);
 
@@ -1191,8 +1166,8 @@ namespace FamilyMang
                 string.IsNullOrEmpty(CurrentSearchQuery) && !ShowFavoritesOnly)
             {
                 parts.Add(
-                    "\u041f\u0443\u0441\u0442\u043e: \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 (" + configuredCompany + ", " +
-                    Environment.UserName + ") \u0432 company_users \u0438\u043b\u0438 \u0436\u0434\u0438\u0442\u0435 backend rev 7");
+                    "\u041f\u0443\u0441\u0442\u043e: \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 " + Environment.UserName +
+                    " \u0432 whitelist FamilyMang \u0438\u043b\u0438 \u0436\u0434\u0438\u0442\u0435 backend rev 9");
             }
 
             return parts.Count == 0 ? "" : " \u2022 " + string.Join(" \u2022 ", parts);
@@ -1301,7 +1276,7 @@ namespace FamilyMang
 
             try
             {
-                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), _companyBox.Text.Trim()))
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim()))
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
@@ -1363,7 +1338,7 @@ namespace FamilyMang
                 }
 
                 PersistSettings();
-                using (var auth = new JwtAuthService(_urlBox.Text.Trim(), _companyBox.Text.Trim()))
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim()))
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
