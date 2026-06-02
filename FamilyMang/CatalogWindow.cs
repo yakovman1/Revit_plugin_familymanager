@@ -253,7 +253,8 @@ namespace FamilyMang
                 Header = CreateCategoryHeader(folder),
                 Tag = folder,
                 Padding = new Thickness(2, 4, 2, 4),
-                IsExpanded = folder.IsAll || folder.Children.Count > 0
+                IsExpanded = folder.IsAll || folder.IsAnnotationSection || folder.IsFamilySection ||
+                               folder.Children.Count > 0
             };
 
             foreach (var child in folder.Children)
@@ -301,6 +302,9 @@ namespace FamilyMang
         private static StackPanel CreateCategoryHeader(CategoryFolderItem folder)
         {
             var icon = folder.IsAll ? "\uD83D\uDCC1 "
+                : folder.IsAnnotationSection ? "\uD83C\uDFF7 "
+                : folder.IsFamilySection ? "\uD83C\uDFE0 "
+                : folder.IsAnnotationCategory ? "\u25A6 "
                 : folder.IsManufacturerNode ? "\uD83C\uDFED "
                 : "\uD83D\uDCC2 ";
 
@@ -1104,6 +1108,17 @@ namespace FamilyMang
                     ? " \u2022 " + cat
                     : " \u2022 " + cat + " / " + mfr;
             }
+
+            if (string.Equals(filterKey, CatalogFamilyClassification.AnnotationSectionKey,
+                    StringComparison.OrdinalIgnoreCase))
+                return " \u2022 " + CatalogFamilyClassification.AnnotationSectionLabel;
+
+            if (string.Equals(filterKey, CatalogFamilyClassification.FamilySectionKey,
+                    StringComparison.OrdinalIgnoreCase))
+                return " \u2022 " + CatalogFamilyClassification.FamilySectionLabel;
+
+            if (filterKey.StartsWith("ann:", StringComparison.OrdinalIgnoreCase))
+                return " \u2022 Annotation / " + filterKey.Substring(4);
 
             if (filterKey.StartsWith("cat:", StringComparison.OrdinalIgnoreCase))
                 return " \u2022 " + filterKey.Substring(4);

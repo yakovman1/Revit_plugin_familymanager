@@ -252,17 +252,22 @@ namespace FamilyMang
             Family family, FamilyManager fm, string filePath, string fileName, bool isPrimary)
         {
             var fi = new FileInfo(filePath);
+            var category = family.FamilyCategory;
+            var isAnnotation = category != null &&
+                               category.CategoryType == CategoryType.Annotation;
+
             return new ExtractedFamilyData
             {
                 FilePath = filePath,
                 FamilyName = family.Name,
                 OriginalFilename = fileName,
-                Category = family.FamilyCategory?.Name,
+                Category = category?.Name,
                 SizeBytes = fi.Length,
                 Sha256 = ComputeSha256(filePath),
                 Parameters = ExtractParameters(fm),
                 Types = ExtractTypes(fm),
-                IsPrimary = isPrimary
+                IsPrimary = isPrimary,
+                IsAnnotation = isAnnotation
             };
         }
 

@@ -64,6 +64,10 @@ namespace FamilyMang
                     return Result.Succeeded;
 
                 var settings = PluginSettings.Load();
+                var uiDoc = commandData.Application.ActiveUIDocument;
+
+                // Снимок до ExtractBundle/SaveAs — иначе ExportImage в редакторе марки часто не пишет файл
+                var thumbExport = FamilyThumbnailExporter.TryExportDetailed(doc, uiDoc);
 
                 ExtractedUploadBundle extracted;
                 try
@@ -76,9 +80,6 @@ namespace FamilyMang
                         $"Не удалось подготовить файлы семейств:\n{ex.Message}");
                     return Result.Failed;
                 }
-
-                var uiDoc = commandData.Application.ActiveUIDocument;
-                var thumbExport = FamilyThumbnailExporter.TryExportDetailed(doc, uiDoc);
                 string hostThumbnailPath = thumbExport.FilePath;
                 string thumbnailExportNote = thumbExport.Success
                     ? null
@@ -261,6 +262,7 @@ namespace FamilyMang
                 { "is_primary", data.IsPrimary },
                 { "role", data.IsPrimary ? "host" : "nested" },
                 { "version", version },
+                { "is_annotation", data.IsAnnotation },
                 { "uploaded_by_windows_user", Environment.UserName }
             };
 
