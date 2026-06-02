@@ -25,6 +25,77 @@ namespace FamilyMang
         /// <summary>
         /// Извлечение всех .rfa — только на главном потоке Revit (до HTTP).
         /// </summary>
+        public static void SaveBundleToStorageFolder(Document doc, FamilyUploadBundle bundle, string destinationFolder)
+        {
+            if (doc == null) throw new ArgumentNullException(nameof(doc));
+            if (bundle?.Primary == null)
+                throw new InvalidOperationException("Не найдено основное семейство.");
+
+            if (!FamilyStoragePaths.IsUnderRoot(destinationFolder))
+                throw new InvalidOperationException("Папка назначения должна находиться внутри хранилища семейств.");
+
+            Directory.CreateDirectory(destinationFolder);
+
+            if (doc.IsFamilyDocument && bundle.Primary.IsPrimary)
+                SaveHostFamilyToFolder(doc, destinationFolder);
+            else
+                SaveFamilyItemToFolder(doc, bundle.Primary, destinationFolder);
+
+            foreach (var nested in bundle.Nested)
+                SaveFamilyItemToFolder(doc, nested, destinationFolder);
+        }
+
+        private static void SaveHostFamilyToFolder(Document doc, string destinationFolder)
+        {
+            var family = doc.OwnerFamily;
+            if (family == null)
+                throw new InvalidOperationException("Редактор семейств не содержит OwnerFamily.");
+
+            string destPath = BuildDestinationPath(doc, family, destinationFolder);
+            doc.SaveAs(destPath, new SaveAsOptions { OverwriteExistingFile = true });
+        }
+
+        private static void SaveFamilyItemToFolder(Document doc, FamilyDisplayItem item, string destinationFolder)
+        {
+            var family = doc.GetElement(new ElementId(item.ElementIdValue)) as Family;
+            if (family == null)
+                throw new InvalidOperationException($"Семейство «{item.Name}» не найдено в документе.");
+
+            string destPath = BuildDestinationPath(doc, family, destinationFolder, item.Name);
+
+            Document famDoc = doc.EditFamily(family);
+            if (famDoc == null)
+                throw new InvalidOperationException($"Не удалось открыть семейство «{item.Name}» для сохранения.");
+
+            try
+            {
+                famDoc.SaveAs(destPath, new SaveAsOptions { OverwriteExistingFile = true });
+            }
+            finally
+            {
+                famDoc.Close(false);
+            }
+        }
+
+        private static string BuildDestinationPath(Document doc, Family family, string destinationFolder, string nameOverride = null)
+        {
+            string displayName = nameOverride;
+            if (string.IsNullOrWhiteSpace(displayName))
+            {
+                displayName = IsHostFamily(doc, family)
+                    ? ResolveHostFamilyName(doc, family)
+                    : family.Name;
+            }
+
+            string fileName = SanitizeName(displayName) + ".rfa";
+            return Path.Combine(destinationFolder, fileName);
+        }
+
+        private static bool IsHostFamily(Document doc, Family family)
+        {
+            return doc.IsFamilyDocument && doc.OwnerFamily != null && doc.OwnerFamily.Id == family.Id;
+        }
+
         public static ExtractedUploadBundle ExtractBundle(Document doc, FamilyUploadBundle bundle)
         {
             var primaryItem = bundle.Primary;

@@ -78,6 +78,8 @@
     <Compile Include="Settings.cs" />
     <Compile Include="UploadCommand.cs" />
     <Compile Include="UploadWindow.cs" />
+    <Compile Include="FamilyStoragePaths.cs" />
+    <Compile Include="ProcessIdentity.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

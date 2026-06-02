@@ -325,12 +325,15 @@ namespace FamilyMang
             _settings.ServerUrl = _urlBox.Text.Trim();
             _settings.Save();
 
+            if (!FamilyStoragePaths.TryPickStorageFolder(this, out string folderPath, _bundle.HostFamilyName))
+                return;
+
             ConfirmedUpload = true;
             _uploadBtn.IsEnabled = false;
-            _statusText.Text = "\u0412\u044b\u0433\u0440\u0443\u0437\u043a\u0430 \u0432 \u0445\u0440\u0430\u043d\u0438\u043b\u0438\u0449\u0435\u2026";
+            _statusText.Text = $"Сохранение в {folderPath} и выгрузка в БД…";
             _statusText.Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120));
 
-            UploadWorkflowHandler.Schedule(_bundle, PluginSettings.Load());
+            UploadWorkflowHandler.Schedule(_bundle, PluginSettings.Load(), folderPath);
         }
 
         #endregion

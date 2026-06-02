@@ -187,6 +187,23 @@ namespace FamilyMang
             }
         }
 
+        /// <summary>
+        /// Удаляет host-семейство, все nested и объекты в S3 (см. api_spec DELETE /families/{id}).
+        /// </summary>
+        public async Task<DeleteFamilyResponseDto> DeleteFamilyAsync(string familyId)
+        {
+            using (var resp = await SendAuthedAsync(() =>
+                       new HttpRequestMessage(HttpMethod.Delete,
+                           Url($"/families/{familyId}")))
+                   .ConfigureAwait(false))
+            {
+                await EnsureSuccessOrThrowAsync(resp, "delete-family").ConfigureAwait(false);
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                return _json.Deserialize<DeleteFamilyResponseDto>(body)
+                       ?? new DeleteFamilyResponseDto();
+            }
+        }
+
         public async Task<string> GetThumbnailUrlAsync(string familyId)
         {
             using (var resp = await SendAuthedAsync(() =>

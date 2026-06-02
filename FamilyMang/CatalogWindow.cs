@@ -24,6 +24,7 @@ namespace FamilyMang
         private DataGrid _grid;
         private Button _connectBtn;
         private Button _loadBtn;
+        private Button _deleteBtn;
         private Button _prevBtn;
         private Button _nextBtn;
         private TextBlock _statusText;
@@ -33,6 +34,7 @@ namespace FamilyMang
         private Button _clearSearchBtn;
         private DispatcherTimer _searchDebounceTimer;
         private TreeView _categoryTree;
+        private TabControl _modeTabs;
         private string _selectedCategoryKey = CatalogCategories.AllKey;
         private bool _suppressCategoryTreeEvent;
         private Image _previewImage;
@@ -63,7 +65,7 @@ namespace FamilyMang
 
         private void SetupWindow()
         {
-            Title = "FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432";
+            Title = "FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432";
             Width = 1280;
             Height = 640;
             MinWidth = 1020;
@@ -80,13 +82,17 @@ namespace FamilyMang
         {
             var root = new DockPanel();
 
-            var header = BrandingHeader.Create("FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432");
+            var header = BrandingHeader.Create("FamilyMang \u2014 \u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432");
             DockPanel.SetDock(header, Dock.Top);
             root.Children.Add(header);
 
             var connBar = BuildConnectionBar();
             DockPanel.SetDock(connBar, Dock.Top);
             root.Children.Add(connBar);
+
+            _modeTabs = BuildModeTabs();
+            DockPanel.SetDock(_modeTabs, Dock.Top);
+            root.Children.Add(_modeTabs);
 
             var actionBar = BuildActionBar();
             DockPanel.SetDock(actionBar, Dock.Bottom);
@@ -100,6 +106,54 @@ namespace FamilyMang
             root.Children.Add(center);
 
             Content = root;
+        }
+
+        private TabControl BuildModeTabs()
+        {
+            var tabs = new TabControl
+            {
+                Margin = new Thickness(12, 0, 12, 0)
+            };
+            tabs.Items.Add(new TabItem { Header = "\u041a\u0430\u0442\u0430\u043b\u043e\u0433" });
+            tabs.Items.Add(new TabItem { Header = "\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435" });
+            tabs.SelectionChanged += OnModeTabChanged;
+            return tabs;
+        }
+
+        private bool IsDeleteMode => _modeTabs != null && _modeTabs.SelectedIndex == 1;
+
+        private void OnModeTabChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadBtn == null || _deleteBtn == null)
+                return;
+
+            ApplyModeUi();
+            OnGridSelectionChanged(_grid, e);
+        }
+
+        private void ApplyModeUi()
+        {
+            bool deleteMode = IsDeleteMode;
+
+            _loadBtn.Visibility = deleteMode ? Visibility.Collapsed : Visibility.Visible;
+            _deleteBtn.Visibility = deleteMode ? Visibility.Visible : Visibility.Collapsed;
+
+            if (_previewTitle != null)
+                _previewTitle.Text = deleteMode ? "\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435" : "\u041f\u0440\u0435\u0432\u044c\u044e";
+
+            if (_previewImage != null)
+                _previewImage.Visibility = deleteMode ? Visibility.Collapsed : Visibility.Visible;
+
+            if (deleteMode)
+            {
+                ClearPreview();
+                if (_previewHint != null)
+                {
+                    _previewHint.Text =
+                        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u0438 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u0423\u0434\u0430\u043b\u0438\u0442\u044c\u00bb.\n" +
+                        "\u0411\u0443\u0434\u0443\u0442 \u0443\u0434\u0430\u043b\u0435\u043d\u044b \u0437\u0430\u043f\u0438\u0441\u0438 \u0432 \u0411\u0414, \u0444\u0430\u0439\u043b\u044b \u0432 S3 \u0438 \u0432\u0441\u0435 \u0432\u043b\u043e\u0436\u0435\u043d\u043d\u044b\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u0430 \u0441\u043e\u0441\u0442\u0430\u0432\u0430.";
+                }
+            }
         }
 
         private Grid BuildCenterPanel()
@@ -605,17 +659,50 @@ namespace FamilyMang
             if (_grid.SelectedItem is CatalogFamilyRow row && row.IsHostRow)
             {
                 _selectedHostFamilyId = row.Family?.id;
-                _loadBtn.IsEnabled = true;
+                UpdatePrimaryActionButtons(row);
                 RefreshGridRowVisuals();
-                _ = LoadPreviewForSelectionAsync(row);
+                if (!IsDeleteMode)
+                    _ = LoadPreviewForSelectionAsync(row);
+                else
+                    UpdateDeletePreview(row);
             }
             else
             {
                 _selectedHostFamilyId = null;
-                _loadBtn.IsEnabled = false;
+                UpdatePrimaryActionButtons(null);
                 RefreshGridRowVisuals();
                 ClearPreview();
             }
+        }
+
+        private void UpdatePrimaryActionButtons(CatalogFamilyRow row)
+        {
+            bool hostSelected = row != null && row.IsHostRow;
+            if (IsDeleteMode)
+            {
+                _deleteBtn.IsEnabled = hostSelected;
+                _loadBtn.IsEnabled = false;
+            }
+            else
+            {
+                _loadBtn.IsEnabled = hostSelected;
+                _deleteBtn.IsEnabled = false;
+            }
+        }
+
+        private void UpdateDeletePreview(CatalogFamilyRow row)
+        {
+            if (_previewHint == null || row?.Family == null)
+                return;
+
+            var nested = row.NestedCount;
+            _previewHint.Text =
+                $"\u0421\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e: {row.Family.FamilyName}\n" +
+                $"\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f: {row.Category}\n" +
+                $"\u0412\u0435\u0440\u0441\u0438\u044f: {row.VersionDisplay}\n\n" +
+                (nested > 0
+                    ? $"\u0411\u0443\u0434\u0435\u0442 \u0443\u0434\u0430\u043b\u0435\u043d\u043e: 1 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 + {nested} \u0432\u043b\u043e\u0436\u0435\u043d\u043d\u044b\u0445."
+                    : "\u0411\u0443\u0434\u0435\u0442 \u0443\u0434\u0430\u043b\u0435\u043d\u043e \u043e\u0434\u043d\u043e \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 \u0441\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e.");
         }
 
         private void OnGridMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -627,9 +714,12 @@ namespace FamilyMang
 
                 _selectedHostFamilyId = row.Family?.id;
                 _grid.SelectedItem = row;
-                _loadBtn.IsEnabled = true;
+                UpdatePrimaryActionButtons(row);
                 RefreshGridRowVisuals();
-                _ = LoadPreviewForSelectionAsync(row);
+                if (!IsDeleteMode)
+                    _ = LoadPreviewForSelectionAsync(row);
+                else
+                    UpdateDeletePreview(row);
             }
         }
 
@@ -762,6 +852,16 @@ namespace FamilyMang
             _loadBtn.Click += OnLoadClick;
             DockPanel.SetDock(_loadBtn, Dock.Right);
             panel.Children.Add(_loadBtn);
+
+            _deleteBtn = Btn("\u0423\u0434\u0430\u043b\u0438\u0442\u044c", true);
+            _deleteBtn.IsEnabled = false;
+            _deleteBtn.Margin = new Thickness(0, 0, 8, 0);
+            _deleteBtn.Visibility = Visibility.Collapsed;
+            _deleteBtn.Background = new SolidColorBrush(Color.FromRgb(200, 50, 50));
+            _deleteBtn.BorderBrush = new SolidColorBrush(Color.FromRgb(160, 40, 40));
+            _deleteBtn.Click += OnDeleteClick;
+            DockPanel.SetDock(_deleteBtn, Dock.Right);
+            panel.Children.Add(_deleteBtn);
 
             _statusText = new TextBlock
             {
@@ -1072,6 +1172,78 @@ namespace FamilyMang
             }
         }
 
+        private async void OnDeleteClick(object sender, RoutedEventArgs e)
+        {
+            if (!IsDeleteMode)
+                return;
+
+            if (!(_grid.SelectedItem is CatalogFamilyRow row) || !row.IsHostRow || row.Family == null)
+                return;
+
+            var family = row.Family;
+            var familyName = family.FamilyName ?? family.original_filename ?? family.id;
+            var nestedCount = row.NestedCount;
+
+            var message =
+                $"\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u00ab{familyName}\u00bb \u0438\u0437 \u0411\u0414 \u0438 S3?\n\n" +
+                (nestedCount > 0
+                    ? $"\u0411\u0443\u0434\u0443\u0442 \u0443\u0434\u0430\u043b\u0435\u043d\u044b \u0437\u0430\u043f\u0438\u0441\u0438: 1 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0435 + {nestedCount} \u0432\u043b\u043e\u0436\u0435\u043d\u043d\u044b\u0445.\n\n"
+                    : "") +
+                "\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043d\u0435\u043e\u0431\u0440\u0430\u0442\u0438\u043c\u043e.";
+
+            if (MessageBox.Show(this, message, "FamilyMang \u2014 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
+
+            Busy(true);
+            Status($"\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u00ab{familyName}\u00bb\u2026", false);
+
+            try
+            {
+                using (var auth = new JwtAuthService(_urlBox.Text.Trim()))
+                using (var client = new ApiClient(auth))
+                {
+                    client.BaseUrl = _urlBox.Text.Trim();
+                    var result = await client.DeleteFamilyAsync(family.id).ConfigureAwait(true);
+
+                    RemoveDeletedFamiliesFromCache(result?.deleted_family_ids);
+                    _offset = 0;
+                    await LoadPageAsync();
+
+                    int deletedCount = result?.deleted_family_ids?.Count ?? 0;
+                    MessageBox.Show(this,
+                        $"\u0421\u0435\u043c\u0435\u0439\u0441\u0442\u0432\u043e \u00ab{familyName}\u00bb \u0443\u0434\u0430\u043b\u0435\u043d\u043e.\n" +
+                        $"\u0417\u0430\u043f\u0438\u0441\u0435\u0439 \u0432 \u0411\u0414: {deletedCount}\n" +
+                        $"S3 \u043e\u0431\u044a\u0435\u043a\u0442\u043e\u0432: {result?.deleted_s3_objects?.Count ?? 0}",
+                        "FamilyMang",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                Status($"\u041e\u0448\u0438\u0431\u043a\u0430 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u044f: {ex.Message}", true);
+                MessageBox.Show(this, ex.Message, "FamilyMang \u2014 \u043e\u0448\u0438\u0431\u043a\u0430",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                Busy(false);
+            }
+        }
+
+        private void RemoveDeletedFamiliesFromCache(IList<string> deletedFamilyIds)
+        {
+            if (_cachedFamilies == null || deletedFamilyIds == null || deletedFamilyIds.Count == 0)
+                return;
+
+            var ids = new HashSet<string>(deletedFamilyIds, StringComparer.OrdinalIgnoreCase);
+            _cachedFamilies.RemoveAll(f => f != null && ids.Contains(f.id));
+
+            foreach (var id in ids)
+                _favoriteIds.Remove(id);
+        }
+
         private void RefreshPagination()
         {
             int pages = _total == 0 ? 0 : (int)Math.Ceiling((double)_total / PageSize);
@@ -1092,8 +1264,6 @@ namespace FamilyMang
         private void Busy(bool busy)
         {
             _connectBtn.IsEnabled = !busy;
-            _loadBtn.IsEnabled = !busy &&
-                _grid.SelectedItem is CatalogFamilyRow r && r.IsHostRow;
             _urlBox.IsEnabled = !busy;
             if (_filterCombo != null)
                 _filterCombo.IsEnabled = !busy;
@@ -1103,6 +1273,20 @@ namespace FamilyMang
                 _clearSearchBtn.IsEnabled = !busy && !string.IsNullOrWhiteSpace(_searchBox?.Text);
             if (_categoryTree != null)
                 _categoryTree.IsEnabled = !busy;
+            if (_modeTabs != null)
+                _modeTabs.IsEnabled = !busy;
+
+            if (!busy)
+            {
+                var row = _grid?.SelectedItem as CatalogFamilyRow;
+                UpdatePrimaryActionButtons(row != null && row.IsHostRow ? row : null);
+            }
+            else
+            {
+                if (_loadBtn != null) _loadBtn.IsEnabled = false;
+                if (_deleteBtn != null) _deleteBtn.IsEnabled = false;
+            }
+
             Cursor = busy ? Cursors.Wait : null;
         }
 

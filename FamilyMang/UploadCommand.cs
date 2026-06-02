@@ -69,6 +69,7 @@ namespace FamilyMang
             PluginSettings settings,
             ExtractedUploadBundle extracted,
             string hostThumbnailPath,
+            string storageFolderPath,
             string thumbnailExportNote = null)
         {
             using (var auth = new JwtAuthService(settings.ServerUrl))
@@ -86,6 +87,7 @@ namespace FamilyMang
 
                 var primaryResult = await UploadSingleAsync(
                     client, primaryData,
+                    storageFolderPath,
                     parentFamilyId: null,
                     parentFamilyName: null,
                     nestedPreview: nestedPreview,
@@ -101,6 +103,7 @@ namespace FamilyMang
                     {
                         var nestedResult = await UploadSingleAsync(
                             client, nestedData,
+                            storageFolderPath,
                             parentFamilyId: primaryResult.FamilyId,
                             parentFamilyName: primaryData.FamilyName,
                             nestedPreview: null).ConfigureAwait(false);
@@ -116,6 +119,7 @@ namespace FamilyMang
 
                 var lines = new List<string>
                 {
+                    $"Папка: {storageFolderPath}",
                     $"Основное семейство «{primaryData.FamilyName}»: {FormatVersionLine(primaryResult)}",
                     $"ID: {primaryResult.FamilyId}",
                     $"Вложенных: {nestedOk} из {extracted.Nested.Count}"
@@ -155,6 +159,7 @@ namespace FamilyMang
         private static async Task<FamilyUploadResult> UploadSingleAsync(
             ApiClient client,
             ExtractedFamilyData data,
+            string storageFolderPath,
             string parentFamilyId,
             string parentFamilyName,
             List<object> nestedPreview,
@@ -225,7 +230,9 @@ namespace FamilyMang
                 { "role", data.IsPrimary ? "host" : "nested" },
                 { "version", version },
                 { "is_annotation", data.IsAnnotation },
-                { "uploaded_by_windows_user", Environment.UserName }
+                { "uploaded_by_windows_user", Environment.UserName },
+                { "storage_folder_path", storageFolderPath ?? "" },
+                { "storage_folder_relative", FamilyStoragePaths.ToRelativePath(storageFolderPath) }
             };
 
             if (!string.IsNullOrEmpty(parentFamilyId))

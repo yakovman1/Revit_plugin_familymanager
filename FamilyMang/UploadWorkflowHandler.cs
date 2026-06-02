@@ -15,6 +15,7 @@ namespace FamilyMang
 
         private FamilyUploadBundle _bundle;
         private PluginSettings _settings;
+        private string _storageFolderPath;
 
         public static void Initialize()
         {
@@ -25,14 +26,18 @@ namespace FamilyMang
             _externalEvent = ExternalEvent.Create(_handler);
         }
 
-        public static void Schedule(FamilyUploadBundle bundle, PluginSettings settings)
+        public static void Schedule(FamilyUploadBundle bundle, PluginSettings settings, string storageFolderPath)
         {
-            if (bundle == null || settings == null)
+            if (bundle == null || settings == null || string.IsNullOrWhiteSpace(storageFolderPath))
+                return;
+
+            if (!FamilyStoragePaths.IsUnderRoot(storageFolderPath))
                 return;
 
             Initialize();
             _handler._bundle = bundle;
             _handler._settings = settings;
+            _handler._storageFolderPath = storageFolderPath;
             _externalEvent.Raise();
         }
 
@@ -40,8 +45,10 @@ namespace FamilyMang
         {
             var bundle = _bundle;
             var settings = _settings;
+            var storageFolderPath = _storageFolderPath;
             _bundle = null;
             _settings = null;
+            _storageFolderPath = null;
 
             try
             {
@@ -74,6 +81,17 @@ namespace FamilyMang
                     return;
                 }
 
+                try
+                {
+                    FamilyExtractor.SaveBundleToStorageFolder(doc, bundle, storageFolderPath);
+                }
+                catch (Exception ex)
+                {
+                    TaskDialog.Show("FamilyMang — Ошибка доступа",
+                        $"Не удалось сохранить файлы в папку:\n{storageFolderPath}\n\n{ex.Message}\n\n{ProcessIdentity.GetDiagnosticSummary()}");
+                    return;
+                }
+
                 string hostThumbnailPath = thumbExport.FilePath;
                 string thumbnailExportNote = thumbExport.Success
                     ? null
@@ -84,14 +102,15 @@ namespace FamilyMang
 
                 string resultMessage = Task.Run(() =>
                         UploadCommand.UploadExtractedBundleAsync(
-                            settings, extracted, hostThumbnailPath, thumbnailExportNote))
+                            settings, extracted, hostThumbnailPath, storageFolderPath, thumbnailExportNote))
                     .GetAwaiter().GetResult();
 
                 TaskDialog.Show("FamilyMang", resultMessage);
             }
             catch (Exception ex)
             {
-                TaskDialog.Show("FamilyMang — Ошибка", ex.Message);
+                TaskDialog.Show("FamilyMang — Ошибка",
+                    $"{ex.Message}\n\n{ProcessIdentity.GetDiagnosticSummary()}");
             }
         }
 

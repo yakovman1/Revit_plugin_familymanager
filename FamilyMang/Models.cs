@@ -629,6 +629,13 @@ namespace FamilyMang
             new CatalogFamilyRow { Family = family, IsNested = isNested };
     }
 
+    public class DeleteFamilyResponseDto
+    {
+        public bool ok { get; set; }
+        public List<string> deleted_family_ids { get; set; } = new List<string>();
+        public List<string> deleted_s3_objects { get; set; } = new List<string>();
+    }
+
     public class ListFamiliesResponseDto
     {
         public List<FamilySummaryDto> items { get; set; } = new List<FamilySummaryDto>();
