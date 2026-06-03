@@ -17,8 +17,25 @@ namespace FamilyMang
 
         private string _cachedToken;
         private DateTime _tokenExpiry = DateTime.MinValue;
+        private List<string> _permissions = new List<string>();
 
         public string WindowsUser => _windowsUser;
+
+        public IReadOnlyList<string> Permissions => _permissions;
+
+        public bool HasPermission(string permission)
+        {
+            if (string.IsNullOrWhiteSpace(permission))
+                return false;
+
+            foreach (var p in _permissions)
+            {
+                if (string.Equals(p, permission, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
 
         public JwtAuthService(string baseUrl, int timeoutSeconds = 120)
         {
@@ -62,6 +79,8 @@ namespace FamilyMang
                     if (string.IsNullOrEmpty(_cachedToken))
                         throw new AuthException(0, "Сервер вернул пустой токен");
 
+                    _permissions = ParsePermissions(dto);
+
                     var expiresIn = dto.ContainsKey("expiresIn")
                         ? Convert.ToInt32(dto["expiresIn"])
                         : 28800;
@@ -81,6 +100,26 @@ namespace FamilyMang
         {
             _cachedToken = null;
             _tokenExpiry = DateTime.MinValue;
+            _permissions = new List<string>();
+        }
+
+        private static List<string> ParsePermissions(Dictionary<string, object> dto)
+        {
+            var list = new List<string>();
+            if (dto == null || !dto.TryGetValue("permissions", out var raw) || raw == null)
+                return list;
+
+            if (raw is System.Collections.IEnumerable items && !(raw is string))
+            {
+                foreach (var item in items)
+                {
+                    var value = item?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(value))
+                        list.Add(value);
+                }
+            }
+
+            return list;
         }
 
         public void Dispose() => _http?.Dispose();

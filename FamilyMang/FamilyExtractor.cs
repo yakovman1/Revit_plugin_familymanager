@@ -41,8 +41,7 @@ namespace FamilyMang
             else
                 SaveFamilyItemToFolder(doc, bundle.Primary, destinationFolder);
 
-            foreach (var nested in bundle.Nested)
-                SaveFamilyItemToFolder(doc, nested, destinationFolder);
+            // На сетевой диск P: — только host; nested выгружаются в БД/S3 через ExtractBundle.
         }
 
         private static void SaveHostFamilyToFolder(Document doc, string destinationFolder)

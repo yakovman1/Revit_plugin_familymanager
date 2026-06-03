@@ -35,6 +35,8 @@ namespace FamilyMang
         private DispatcherTimer _searchDebounceTimer;
         private TreeView _categoryTree;
         private TabControl _modeTabs;
+        private TabItem _deleteTab;
+        private bool _canDeleteFamilies;
         private string _selectedCategoryKey = CatalogCategories.AllKey;
         private bool _suppressCategoryTreeEvent;
         private Image _previewImage;
@@ -115,12 +117,29 @@ namespace FamilyMang
                 Margin = new Thickness(12, 0, 12, 0)
             };
             tabs.Items.Add(new TabItem { Header = "\u041a\u0430\u0442\u0430\u043b\u043e\u0433" });
-            tabs.Items.Add(new TabItem { Header = "\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435" });
+            _deleteTab = new TabItem
+            {
+                Header = "\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435",
+                Visibility = Visibility.Collapsed
+            };
+            tabs.Items.Add(_deleteTab);
             tabs.SelectionChanged += OnModeTabChanged;
             return tabs;
         }
 
-        private bool IsDeleteMode => _modeTabs != null && _modeTabs.SelectedIndex == 1;
+        private void UpdateDeleteTabAccess(bool canDelete)
+        {
+            _canDeleteFamilies = canDelete;
+            if (_deleteTab == null)
+                return;
+
+            _deleteTab.Visibility = canDelete ? Visibility.Visible : Visibility.Collapsed;
+
+            if (!canDelete && _modeTabs != null && _modeTabs.SelectedItem == _deleteTab)
+                _modeTabs.SelectedIndex = 0;
+        }
+
+        private bool IsDeleteMode => _canDeleteFamilies && _modeTabs != null && _modeTabs.SelectedItem == _deleteTab;
 
         private void OnModeTabChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -1053,6 +1072,9 @@ namespace FamilyMang
                 using (var client = new ApiClient(auth))
                 {
                     client.BaseUrl = _urlBox.Text.Trim();
+                    await auth.GetTokenAsync().ConfigureAwait(true);
+                    UpdateDeleteTabAccess(auth.HasPermission(FamilyPermissions.DeleteFamilies));
+
                     var isNewCatalogLoad = _cachedFamilies == null;
                     if (isNewCatalogLoad)
                     {
@@ -1092,6 +1114,7 @@ namespace FamilyMang
             }
             catch (AuthException ex)
             {
+                UpdateDeleteTabAccess(false);
                 Status(ex.StatusCode == 403
                     ? "\u0414\u043e\u0441\u0442\u0443\u043f \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d: \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 " + Environment.UserName +
                       " \u0432 whitelist FamilyMang"
@@ -1105,6 +1128,7 @@ namespace FamilyMang
             }
             catch (Exception ex)
             {
+                UpdateDeleteTabAccess(false);
                 Status($"\u041e\u0448\u0438\u0431\u043a\u0430: {ex.Message}", true);
                 _grid.ItemsSource = null;
                 _cachedFamilies = null;

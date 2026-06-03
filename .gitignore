@@ -1,23 +1,64 @@
 ## Build output
-bin/
-obj/
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Ll]og/
+[Ll]ogs/
 
-## Visual Studio
+## Visual Studio / VS Code / Rider
 .vs/
-*.user
+.vscode/
+.idea/
 *.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
 *.cache
 
 ## NuGet
 packages/
+*.nupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Test / coverage
+[Tt]est[Rr]esult*/
+*.VisualState.xml
+TestResult.xml
+coverage*.json
+coverage*.xml
+*.coverage
+*.coveragexml
 
 ## OS
 Thumbs.db
+ehthumbs.db
 Desktop.ini
+$RECYCLE.BIN/
 .DS_Store
 
-## Temp
+## Temp / logs
 *.tmp
+*.temp
 *.log
+*.bak
+*.swp
+*~
 
-FamilyMang/Assets
+## Revit / plugin local assets (logo — см. FamilyMang/Assets/README.md)
+FamilyMang/Assets/*
+!FamilyMang/Assets/README.md
+
+## Secrets / local settings (если появятся)
+*.env
+.env.*
+appsettings.local.json
+secrets.json
